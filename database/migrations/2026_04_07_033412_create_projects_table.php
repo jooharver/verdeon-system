@@ -18,10 +18,8 @@ return new class extends Migration
                 ->cascadeOnDelete();
 
             // ACTIVE VERSION
-            $table->foreignId('active_version_id')
-                ->nullable()
-                ->constrained('project_versions')
-                ->nullOnDelete();
+            $table->unsignedBigInteger('active_version_id')
+                ->nullable();
 
             // BLOCKCHAIN FINAL DATA
             $table->string('blockchain_tx')->nullable();
