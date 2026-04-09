@@ -46,7 +46,10 @@ class ProjectController extends Controller
                 'location_city' => $request->location_city,
                 'address' => $request->address,
 
-                'status' => 'draft'
+                'status' => 'draft',
+                'admin_verification_status' => 'pending',
+                'auditor_verification_status' => 'pending',
+                'is_locked' => false
             ]);
 
             $project->update([
@@ -120,7 +123,10 @@ class ProjectController extends Controller
 
         $version->update([
             'status'=>'submitted',
+            // 'admin_verification_status'=>'pending',
+            // 'auditor_verification_status'=>'pending',
             'is_locked'=>true
+  
         ]);
 
         return response()->json([
@@ -129,21 +135,93 @@ class ProjectController extends Controller
         ]);
     }
 
-    // ===============================
-    // ADMIN LIST PROJECTS
-    // ===============================
-    public function adminList()
+    //ISSUER SHOW Project Sendiri
+    public function show($id)
     {
-        $projects = Project::with('activeVersion')
-            ->whereHas('activeVersion', function ($q) {
-                $q->where('admin_verification_status','pending')
-                ->where('status','submitted');
-            })
-            ->latest()
-            ->get();
+        $project = Project::with('activeVersion')
+            ->findOrFail($id);
 
-        return response()->json($projects);
+        $user = auth()->user();
+
+        // ISSUER hanya boleh lihat project miliknya
+        if ($user->role === 'issuer' &&
+            $project->issuer_id !== $user->id) {
+
+            return response()->json([
+                'message'=>'Unauthorized'
+            ],403);
+        }
+
+        return response()->json([
+            'project'=>$project,
+            'active_version'=>$project->activeVersion
+        ]);
     }
+
+    //ISSUER SHOW ALL VERSIONS
+    public function versions($id)
+    {
+        $project = Project::with('versions')
+            ->findOrFail($id);
+
+        $user = auth()->user();
+
+        // issuer hanya boleh akses project sendiri
+        if ($user->role === 'issuer' &&
+            $project->issuer_id !== $user->id) {
+
+            return response()->json([
+                'message'=>'Unauthorized'
+            ],403);
+        }
+
+        return response()->json([
+            'project_id'=>$project->id,
+            'versions'=>$project->versions
+                ->sortByDesc('version_number')
+                ->values()
+        ]);
+    }
+
+    //ISSUER SHOW SPECIFIC VERSION
+    public function showVersion($projectId, $versionId)
+    {
+        $project = Project::findOrFail($projectId);
+
+        $version = $project->versions()
+            ->where('id',$versionId)
+            ->firstOrFail();
+
+        $user = auth()->user();
+
+        if ($user->role === 'issuer' &&
+            $project->issuer_id !== $user->id) {
+
+            return response()->json([
+                'message'=>'Unauthorized'
+            ],403);
+        }
+
+        return response()->json([
+            'version'=>$version
+        ]);
+    }
+
+        // ===============================
+        // ADMIN LIST PROJECTS
+        // ===============================
+        public function adminList()
+        {
+            $projects = Project::with('activeVersion')
+                ->whereHas('activeVersion', function ($q) {
+                    $q->where('admin_verification_status','pending')
+                    ->where('status','submitted');
+                })
+                ->latest()
+                ->get();
+
+            return response()->json($projects);
+        }
 
     // ===============================
     // ADMIN APPROVE
@@ -159,6 +237,12 @@ class ProjectController extends Controller
             ],403);
         }
 
+        if ($version->admin_verification_status !== 'pending') {
+            return response()->json([
+                'message'=>'Admin already processed this version'
+            ],400);
+        }
+
         $version->update([
             'admin_verification_status'=>'approved',
             'status'=>'admin_approved'
@@ -169,7 +253,6 @@ class ProjectController extends Controller
             'version'=>$version
         ]);
     }
-
     // ===============================
     // ADMIN REJECT
     // ===============================
@@ -177,6 +260,12 @@ class ProjectController extends Controller
     {
         $project = Project::findOrFail($id);
         $version = $project->activeVersion;
+
+        if ($version->status !== 'submitted') {
+            return response()->json([
+                'message'=>'Version not eligible for rejection'
+            ],403);
+        }
 
         $version->update([
             'admin_verification_status'=>'rejected',
@@ -262,6 +351,12 @@ class ProjectController extends Controller
             ],403);
         }
 
+        if ($version->auditor_verification_status !== 'pending') {
+            return response()->json([
+                'message'=>'Auditor already processed'
+            ],400);
+        }
+
         $version->update([
             'auditor_verification_status'=>'approved',
             'status'=>'auditor_verified'
@@ -279,6 +374,12 @@ class ProjectController extends Controller
     {
         $project = Project::findOrFail($id);
         $version = $project->activeVersion;
+
+        if ($version->admin_verification_status !== 'approved') {
+            return response()->json([
+                'message'=>'Admin approval required before rejection'
+            ],403);
+        }
 
         $version->update([
             'auditor_verification_status'=>'rejected',

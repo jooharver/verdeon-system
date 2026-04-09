@@ -12,17 +12,20 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
-    Route::post('/projects',[ProjectController::class,'store']);
-
     Route::patch('/profile',[AuthController::class,'updateProfile']);
+    Route::get('/projects/{id}',[ProjectController::class,'show']);
+    Route::get('/projects/{id}/versions',[ProjectController::class,'versions']);
+    Route::get('/projects/{projectId}/versions/{versionId}',[ProjectController::class,'showVersion']);
 
     // ISSUER ONLY
     Route::middleware('role:issuer')->group(function () {
         Route::get('/issuer/dashboard', fn() => response()->json([
             'message' => 'Issuer access granted'
         ]));
+        Route::post('/projects',[ProjectController::class,'store']);
         Route::patch('/projects/{id}',[ProjectController::class,'update']);
         Route::post('/projects/{id}/submit',[ProjectController::class,'submit']);
+        Route::get('/issuer/projects',[ProjectController::class,'issuerProjects']);
     });
 
     // ADMIN ONLY
