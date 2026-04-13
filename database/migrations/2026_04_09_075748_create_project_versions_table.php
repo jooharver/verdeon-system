@@ -55,6 +55,7 @@ return new class extends Migration
                 ->nullOnDelete();
 
             $table->text('admin_notes')->nullable();
+            $table->text('auditor_notes')->nullable();
 
             $table->timestamps();
         });
