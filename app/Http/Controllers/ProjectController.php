@@ -394,21 +394,25 @@ class ProjectController extends Controller
 
         return response()->json($projects);
     }
+
     // ===============================
     // AUDITOR LIST PROJECTS
     // ===============================
     public function auditorList()
     {
-        $projects = Project::with('activeVersion')
+        // Ubah dari with('activeVersion') menjadi with(['activeVersion', 'issuer'])
+        $projects = Project::with(['activeVersion', 'issuer'])
             ->whereHas('activeVersion', function ($q) {
-                $q->where('admin_verification_status','approved')
-                ->where('auditor_verification_status','pending');
+                // Di sini kamu bisa menyesuaikan status apa saja yang boleh ditarik auditor
+                // Sesuai kode aslimu:
+                $q->where('admin_verification_status', 'approved');
             })
             ->latest()
             ->get();
 
         return response()->json($projects);
     }
+    
     // ===============================
     // AUDITOR VERIFY
     // ===============================
