@@ -279,21 +279,23 @@ class ProjectController extends Controller
         }
     }
 
-        // ===============================
-        // ADMIN LIST PROJECTS
-        // ===============================
-        public function adminList()
-        {
-            $projects = Project::with('activeVersion')
-                ->whereHas('activeVersion', function ($q) {
-                    $q->where('admin_verification_status','pending')
-                    ->where('status','submitted');
-                })
-                ->latest()
-                ->get();
+    // ===============================
+    // ADMIN LIST PROJECTS
+    // ===============================
+    public function adminList()
+    {
+        // 1. Tambahkan 'issuer' ke dalam with() agar frontend bisa membaca nama perusahaan/issuer
+        // 2. Ubah query agar admin bisa melihat SEMUA proyek, kecuali mungkin yang masih 'draft' murni di sisi issuer
+        $projects = Project::with(['activeVersion', 'issuer'])
+            ->whereHas('activeVersion', function ($q) {
+                // Admin hanya melihat proyek yang sudah pernah disubmit minimal 1 kali
+                $q->where('status', '!=', 'draft'); 
+            })
+            ->latest()
+            ->get();
 
-            return response()->json($projects);
-        }
+        return response()->json($projects);
+    }
 
     // ===============================
     // ADMIN APPROVE

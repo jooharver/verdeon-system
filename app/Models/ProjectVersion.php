@@ -24,7 +24,8 @@ class ProjectVersion extends Model
         'auditor_verification_status',
         'is_locked',
         'auditor_id',
-        'admin_notes'
+        'admin_notes',
+        'auditor_notes'
     ];
 
     public function project()
