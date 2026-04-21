@@ -37,4 +37,9 @@ class ProjectVersion extends Model
     {
         return $this->hasMany(ProjectDocument::class);
     }
+
+    public function auditReport()
+    {
+        return $this->hasOne(AuditReport::class, 'project_version_id');
+    }
 }

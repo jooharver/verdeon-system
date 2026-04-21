@@ -8,6 +8,7 @@ use App\Models\ProjectDocument;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Models\ProjectVersion;
+use App\Models\AuditReport;
 
 class ProjectController extends Controller
 {
@@ -23,90 +24,183 @@ class ProjectController extends Controller
             'location_province' => 'required',
             'location_city' => 'required',
             'address' => 'required',
+            'project_images.*' => 'nullable|image|max:5120',
+            'project_documents.*' => 'nullable|mimes:pdf|max:10240',
         ]);
 
         DB::beginTransaction();
-
         try {
+            $project = Project::create(['issuer_id' => Auth::id()]);
 
-            // CREATE PROJECT IDENTITY
-            $project = Project::create([
-                'issuer_id' => Auth::id(),
-            ]);
-
-            // CREATE VERSION 1
-            $version = \App\Models\ProjectVersion::create([
+            $version = ProjectVersion::create([
                 'project_id' => $project->id,
                 'version_number' => 1,
-
                 'name' => $request->name,
                 'description' => $request->description,
-
                 'location_country' => $request->location_country,
                 'location_province' => $request->location_province,
                 'location_city' => $request->location_city,
                 'address' => $request->address,
-
                 'status' => 'draft',
-                'admin_verification_status' => 'pending',
-                'auditor_verification_status' => 'pending',
-                'admin_notes'=>null,
-                'auditor_notes'=>null,
-                'is_locked' => false,
-
             ]);
 
-            $project->update([
-                'active_version_id'=>$version->id
-            ]);
+            $project->update(['active_version_id' => $version->id]);
+
+            // HANDLE UPLOAD (Reusable Logic)
+            $this->uploadProjectFiles($request, $version->id, 'issuer');
 
             DB::commit();
-
-            return response()->json([
-                'message'=>'Project V1 created',
-                'project'=>$project,
-                'version'=>$version
-            ]);
-
+            return response()->json(['message' => 'Project V1 & Documents created', 'project' => $project]);
         } catch (\Exception $e) {
-
             DB::rollBack();
-
-            return response()->json([
-                'error'=>$e->getMessage()
-            ],500);
+            return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    //ISSUER UPDATE PROJECT (HANYA DRAFT)
+    // ==========================================
+    // ISSUER: UPDATE DRAFT PROJECT
+    // ==========================================
     public function update(Request $request, $id)
     {
-        $project = Project::findOrFail($id);
+        // 1. Validasi Input
+        $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'location_country' => 'sometimes|required|string',
+            'location_province' => 'sometimes|required|string',
+            'location_city' => 'sometimes|required|string',
+            'address' => 'sometimes|required|string',
+            'project_type' => 'nullable|string',
+            'description' => 'nullable|string',
+            'project_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:5120', // Foto max 5MB
+            'project_documents.*' => 'nullable|mimes:pdf,doc,docx|max:10240',   // Dokumen max 10MB
+        ]);
+
+        $project = Project::with('activeVersion')->findOrFail($id);
         $version = $project->activeVersion;
 
+        // 2. Pastikan yang mengedit adalah pemiliknya dan statusnya masih Draft
         if ($project->issuer_id !== auth()->id()) {
-            return response()->json(['message'=>'Unauthorized'],403);
+            return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        if ($version->status !== 'draft') {
+        if (!in_array($version->status, ['draft', 'revision'])) {
+            return response()->json(['message' => 'Hanya proyek berstatus Draft yang dapat diedit.'], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            // 3. Update data teks
+            $version->update($request->only([
+                'name', 'description', 'location_country', 
+                'location_province', 'location_city', 'address', 'project_type'
+            ]));
+
+            // 4. Tambahkan file baru jika ada yang diupload (File lama tidak dihapus)
+            $this->uploadProjectFiles($request, $version->id, 'issuer');
+
+            DB::commit();
             return response()->json([
-                'message'=>'Only draft version editable'
-            ],403);
+                'message' => 'Draft project updated successfully', 
+                'version' => $version
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+
+    // ==========================================
+    // ISSUER: REVISE REJECTED PROJECT
+    // ==========================================
+    public function reviseProject($id)
+    {
+        // Ambil project beserta active_version dan dokumen-dokumennya
+        $project = Project::with('activeVersion.documents')->findOrFail($id);
+        $oldVersion = $project->activeVersion;
+
+        // Pastikan hanya bisa revisi jika statusnya rejected
+        if ($oldVersion->status !== 'rejected') {
+            return response()->json(['message' => 'Hanya proyek yang ditolak (rejected) yang dapat direvisi.'], 400);
         }
 
-        $version->update($request->only([
-            'name',
-            'description',
-            'location_country',
-            'location_province',
-            'location_city',
-            'address'
-        ]));
+        DB::beginTransaction();
+        try {
+            // 1. Buat Versi Baru (Copy dari versi lama, tapi status jadi Draft)
+            $newVersion = ProjectVersion::create([
+                'project_id' => $project->id,
+                'version_number' => $oldVersion->version_number + 1,
+                'name' => $oldVersion->name,
+                'description' => $oldVersion->description,
+                'location_country' => $oldVersion->location_country,
+                'location_province' => $oldVersion->location_province,
+                'location_city' => $oldVersion->location_city,
+                'address' => $oldVersion->address,
+                'project_type' => $oldVersion->project_type,
+                // Kolom teknis lainnya jika sudah ada (seperti panel_capacity_wp dll) bisa ditambahkan di sini
+                'status' => 'draft', // Kembali ke draft
+            ]);
 
-        return response()->json([
-            'message'=>'Draft version updated',
-            'version'=>$version
-        ]);
+            // 2. CARRY OVER DOKUMEN (Salin pointer dokumen lama ke versi baru)
+            if ($oldVersion->documents) {
+                foreach ($oldVersion->documents as $doc) {
+                    ProjectDocument::create([
+                        'project_version_id' => $newVersion->id,
+                        'type' => $doc->type,
+                        'original_filename' => $doc->original_filename,
+                        'file_path' => $doc->file_path, // Menggunakan file fisik yang sama
+                        'uploader_role' => $doc->uploader_role
+                    ]);
+                }
+            }
+
+            // 3. Update pointer versi aktif di tabel induk
+            $project->update(['active_version_id' => $newVersion->id]);
+
+            DB::commit();
+            return response()->json([
+                'message' => 'Revision version created successfully. Documents carried over.',
+                'new_version_id' => $newVersion->id
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+
+    // ==========================================
+    // HELPER: UPLOAD PROJECT FILES
+    // ==========================================
+    private function uploadProjectFiles(Request $request, $versionId, $role)
+    {
+        // Handle Images (Foto Galeri)
+        if ($request->hasFile('project_images')) {
+            foreach ($request->file('project_images') as $file) {
+                $path = $file->store('projects/images', 'public');
+                ProjectDocument::create([
+                    'project_version_id' => $versionId,
+                    'type' => 'image',
+                    'original_filename' => $file->getClientOriginalName(),
+                    'file_path' => $path,
+                    'uploader_role' => $role
+                ]);
+            }
+        }
+
+        // Handle Documents (PDF/Legal)
+        if ($request->hasFile('project_documents')) {
+            foreach ($request->file('project_documents') as $file) {
+                $path = $file->store('projects/legal_docs', 'public');
+                ProjectDocument::create([
+                    'project_version_id' => $versionId,
+                    'type' => 'document',
+                    'original_filename' => $file->getClientOriginalName(),
+                    'file_path' => $path,
+                    'uploader_role' => $role
+                ]);
+            }
+        }
     }
 
     //ISSUER SUBMIT PROJECT
@@ -220,63 +314,6 @@ class ProjectController extends Controller
         return response()->json([
             'version'=>$version
         ]);
-    }
-
-    //ISSUER REVISE
-    public function reviseProject($projectId)
-    {
-        $project = Project::with('activeVersion')->findOrFail($projectId);
-
-        $oldVersion = $project->activeVersion;
-
-        if ($project->issuer_id !== auth()->id()) {
-            return response()->json(['message'=>'Unauthorized'],403);
-        }
-
-        if ($oldVersion->status !== 'rejected') {
-            return response()->json([
-                'message' => 'Project not eligible for revision'
-            ],400);
-        }
-
-        DB::beginTransaction();
-
-        try {
-
-            $newVersion = ProjectVersion::create([
-                'project_id' => $project->id,
-                'version_number' => $oldVersion->version_number + 1,
-
-                'name' => $oldVersion->name,
-                'description' => $oldVersion->description,
-
-                'location_country'=>$oldVersion->location_country,
-                'location_province'=>$oldVersion->location_province,
-                'location_city'=>$oldVersion->location_city,
-                'address'=>$oldVersion->address,
-
-                'status'=>'draft',
-                'admin_verification_status'=>'pending',
-                'auditor_verification_status'=>'pending',
-                'is_locked'=>false
-            ]);
-
-            $project->update([
-                'active_version_id'=>$newVersion->id
-            ]);
-
-            DB::commit();
-
-            return response()->json([
-                'message'=>'Revision created',
-                'version'=>$newVersion
-            ]);
-
-        } catch (\Exception $e){
-
-            DB::rollBack();
-            return response()->json(['error'=>$e->getMessage()],500);
-        }
     }
 
     // ===============================
@@ -416,25 +453,82 @@ class ProjectController extends Controller
     // ===============================
     // AUDITOR VERIFY
     // ===============================
-    public function auditorVerify($projectId)
+    public function auditorVerify(Request $request, $projectId)
     {
+        // 1. Validasi Input Teknis & File
+        $request->validate([
+            'verified_installed_capacity_kwp' => 'required|numeric',
+            'verified_annual_generation_kwh' => 'required|numeric',
+            'baseline_emission_factor' => 'required|numeric',
+            'expected_carbon_reduction_ton_per_year' => 'required|numeric',
+            'onsite_measurement_date' => 'required|date',
+            'audit_notes' => 'nullable|string',
+            'audit_documents.*' => 'required|mimes:pdf|max:10240', // File PDF max 10MB
+            'audit_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:5120', // Foto max 5MB
+        ]);
+
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
 
         if ($version->status !== 'admin_approved') {
-            return response()->json([
-                'message'=>'Version not ready for auditor'
-            ],400);
+            return response()->json(['message' => 'Proyek belum siap untuk diaudit'], 400);
         }
 
-        $version->update([
-            'auditor_verification_status'=>'approved',
-            'status'=>'auditor_verified'
-        ]);
+        DB::beginTransaction();
+        try {
+            // 2. Simpan Data ke Tabel audit_reports
+            AuditReport::create([
+                'project_version_id' => $version->id,
+                'auditor_id' => auth()->id(),
+                'verified_installed_capacity_kwp' => $request->verified_installed_capacity_kwp,
+                'verified_annual_generation_kwh' => $request->verified_annual_generation_kwh,
+                'baseline_emission_factor' => $request->baseline_emission_factor,
+                'expected_carbon_reduction_ton_per_year' => $request->expected_carbon_reduction_ton_per_year,
+                'onsite_measurement_date' => $request->onsite_measurement_date,
+                'audit_notes' => $request->audit_notes,
+            ]);
 
-        return response()->json([
-            'message'=>'Auditor verified'
-        ]);
+            // 3. Handle Upload File Laporan (PDF)
+            if ($request->hasFile('audit_documents')) {
+                foreach ($request->file('audit_documents') as $file) {
+                    $path = $file->store('projects/audit_reports', 'public');
+                    ProjectDocument::create([
+                        'project_version_id' => $version->id,
+                        'type' => 'document',
+                        'original_filename' => $file->getClientOriginalName(),
+                        'file_path' => $path,
+                        'uploader_role' => 'auditor'
+                    ]);
+                }
+            }
+
+            // 4. Handle Upload Foto Bukti Lapangan (Images)
+            if ($request->hasFile('audit_images')) {
+                foreach ($request->file('audit_images') as $file) {
+                    $path = $file->store('projects/audit_images', 'public');
+                    ProjectDocument::create([
+                        'project_version_id' => $version->id,
+                        'type' => 'image',
+                        'original_filename' => $file->getClientOriginalName(),
+                        'file_path' => $path,
+                        'uploader_role' => 'auditor'
+                    ]);
+                }
+            }
+
+            // 5. Update Status Proyek
+            $version->update([
+                'auditor_verification_status' => 'approved',
+                'status' => 'auditor_verified'
+            ]);
+
+            DB::commit();
+            return response()->json(['message' => 'Laporan Audit berhasil disimpan dan proyek diverifikasi']);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
     }
     // ===============================
     // AUDITOR REJECT
