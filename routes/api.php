@@ -27,6 +27,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/projects/{id}/submit',[ProjectController::class,'submit']);
         Route::get('/issuer/projects',[ProjectController::class,'issuerProjects']);
         Route::post('/projects/{id}/revise',[ProjectController::class,'reviseProject']);
+        Route::delete('/projects/{id}',[ProjectController::class,'destroy']);
     });
 
     // ADMIN ONLY
