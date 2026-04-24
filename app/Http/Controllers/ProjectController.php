@@ -13,7 +13,7 @@ use App\Models\AuditReport;
 class ProjectController extends Controller
 {
 
-    // ===============================
+// ===============================
     // ISSUER CREATE PROJECT
     // ===============================
     public function store(Request $request)
@@ -26,6 +26,15 @@ class ProjectController extends Controller
             'address' => 'required',
             'project_images.*' => 'nullable|image|max:5120',
             'project_documents.*' => 'nullable|mimes:pdf|max:10240',
+            // Validasi data teknis baru
+            'panel_capacity_wp' => 'nullable|numeric',
+            'inverter_capacity_kw' => 'nullable|numeric',
+            'area_size_m2' => 'nullable|numeric',
+            'number_of_panels' => 'nullable|integer',
+            'installation_date' => 'nullable|date',
+            'installation_type' => 'nullable|string',
+            'panel_brand' => 'nullable|string',
+            'inverter_brand' => 'nullable|string',
         ]);
 
         DB::beginTransaction();
@@ -42,6 +51,15 @@ class ProjectController extends Controller
                 'location_city' => $request->location_city,
                 'address' => $request->address,
                 'status' => 'draft',
+                // Data teknis baru
+                'panel_capacity_wp' => $request->panel_capacity_wp,
+                'inverter_capacity_kw' => $request->inverter_capacity_kw,
+                'area_size_m2' => $request->area_size_m2,
+                'number_of_panels' => $request->number_of_panels,
+                'installation_date' => $request->installation_date,
+                'installation_type' => $request->installation_type,
+                'panel_brand' => $request->panel_brand,
+                'inverter_brand' => $request->inverter_brand,
             ]);
 
             $project->update(['active_version_id' => $version->id]);
@@ -73,6 +91,15 @@ class ProjectController extends Controller
             'description' => 'nullable|string',
             'project_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:5120', // Foto max 5MB
             'project_documents.*' => 'nullable|mimes:pdf,doc,docx|max:10240',   // Dokumen max 10MB
+            // Validasi data teknis baru
+            'panel_capacity_wp' => 'nullable|numeric',
+            'inverter_capacity_kw' => 'nullable|numeric',
+            'area_size_m2' => 'nullable|numeric',
+            'number_of_panels' => 'nullable|integer',
+            'installation_date' => 'nullable|date',
+            'installation_type' => 'nullable|string',
+            'panel_brand' => 'nullable|string',
+            'inverter_brand' => 'nullable|string',
         ]);
 
         $project = Project::with('activeVersion')->findOrFail($id);
@@ -89,10 +116,13 @@ class ProjectController extends Controller
 
         DB::beginTransaction();
         try {
-            // 3. Update data teks
+            // 3. Update data teks (termasuk spesifikasi teknis)
             $version->update($request->only([
                 'name', 'description', 'location_country', 
-                'location_province', 'location_city', 'address', 'project_type'
+                'location_province', 'location_city', 'address', 'project_type',
+                'panel_capacity_wp', 'inverter_capacity_kw', 'area_size_m2',
+                'number_of_panels', 'installation_date', 'installation_type',
+                'panel_brand', 'inverter_brand'
             ]));
 
             // 4. Tambahkan file baru jika ada yang diupload (File lama tidak dihapus)
@@ -108,7 +138,6 @@ class ProjectController extends Controller
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
-
 
     // ==========================================
     // ISSUER: REVISE REJECTED PROJECT
@@ -137,8 +166,16 @@ class ProjectController extends Controller
                 'location_city' => $oldVersion->location_city,
                 'address' => $oldVersion->address,
                 'project_type' => $oldVersion->project_type,
-                // Kolom teknis lainnya jika sudah ada (seperti panel_capacity_wp dll) bisa ditambahkan di sini
                 'status' => 'draft', // Kembali ke draft
+                // Salin data teknis dari versi sebelumnya
+                'panel_capacity_wp' => $oldVersion->panel_capacity_wp,
+                'inverter_capacity_kw' => $oldVersion->inverter_capacity_kw,
+                'area_size_m2' => $oldVersion->area_size_m2,
+                'number_of_panels' => $oldVersion->number_of_panels,
+                'installation_date' => $oldVersion->installation_date,
+                'installation_type' => $oldVersion->installation_type,
+                'panel_brand' => $oldVersion->panel_brand,
+                'inverter_brand' => $oldVersion->inverter_brand,
             ]);
 
             // 2. CARRY OVER DOKUMEN (Salin pointer dokumen lama ke versi baru)
@@ -167,7 +204,6 @@ class ProjectController extends Controller
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
-
 
     // ==========================================
     // HELPER: UPLOAD PROJECT FILES
@@ -236,10 +272,14 @@ class ProjectController extends Controller
     //Issuer Show All Project
     public function issuerProjects()
     {
-        $projects = Project::with('activeVersion')
-            ->where('issuer_id', auth()->id())
-            ->latest()
-            ->get();
+        $projects = Project::with([
+            'issuer', // Menarik data User (Issuer)
+            'activeVersion.documents', 
+            'activeVersion.auditReport.auditor' // Menarik data User (Auditor) dari tabel laporan
+        ])
+        ->where('issuer_id', auth()->id())
+        ->latest()
+        ->get();
 
         return response()->json($projects);
     }
@@ -247,8 +287,12 @@ class ProjectController extends Controller
     //ISSUER SHOW Project By Id
     public function show($id)
     {
-        $project = Project::with('activeVersion')
-            ->findOrFail($id);
+        $projects = Project::with([
+            'issuer', // Menarik data User (Issuer)
+            'activeVersion.documents', 
+            'activeVersion.auditReport.auditor' // Menarik data User (Auditor) dari tabel laporan
+        ])
+        ->findOrFail($id);
 
         $user = auth()->user();
 
@@ -323,7 +367,11 @@ class ProjectController extends Controller
     {
         // 1. Tambahkan 'issuer' ke dalam with() agar frontend bisa membaca nama perusahaan/issuer
         // 2. Ubah query agar admin bisa melihat SEMUA proyek, kecuali mungkin yang masih 'draft' murni di sisi issuer
-        $projects = Project::with(['activeVersion', 'issuer'])
+        $projects = Project::with([
+            'issuer', // Menarik data User (Issuer)
+            'activeVersion.documents', 
+            'activeVersion.auditReport.auditor' // Menarik data User (Auditor) dari tabel laporan
+        ])
             ->whereHas('activeVersion', function ($q) {
                 // Admin hanya melihat proyek yang sudah pernah disubmit minimal 1 kali
                 $q->where('status', '!=', 'draft'); 
@@ -438,7 +486,11 @@ class ProjectController extends Controller
     public function auditorList()
     {
         // Ubah dari with('activeVersion') menjadi with(['activeVersion', 'issuer'])
-        $projects = Project::with(['activeVersion', 'issuer'])
+        $projects = Project::with([
+            'issuer', // Menarik data User (Issuer)
+            'activeVersion.documents', 
+            'activeVersion.auditReport.auditor' // Menarik data User (Auditor) dari tabel laporan
+        ])
             ->whereHas('activeVersion', function ($q) {
                 // Di sini kamu bisa menyesuaikan status apa saja yang boleh ditarik auditor
                 // Sesuai kode aslimu:

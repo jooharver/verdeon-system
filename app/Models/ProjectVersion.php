@@ -11,6 +11,7 @@ class ProjectVersion extends Model
         'project_id',
         'version_number',
 
+        // General Info
         'name',
         'description',
         'location_country',
@@ -19,6 +20,17 @@ class ProjectVersion extends Model
         'address',
         'project_type',
 
+        // Technical Specs
+        'panel_capacity_wp',
+        'inverter_capacity_kw',
+        'area_size_m2',
+        'number_of_panels',
+        'installation_date',
+        'installation_type',
+        'panel_brand',
+        'inverter_brand',
+
+        // Status & Workflow
         'status',
         'admin_verification_status',
         'auditor_verification_status',

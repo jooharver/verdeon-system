@@ -18,7 +18,7 @@ return new class extends Migration
 
             $table->integer('version_number');
 
-            // PROJECT DATA
+            // PROJECT DATA (STEP 1)
             $table->string('name');
             $table->text('description')->nullable();
 
@@ -28,6 +28,16 @@ return new class extends Migration
             $table->text('address');
 
             $table->string('project_type')->default('solar');
+
+            // TECHNICAL SPECIFICATIONS (STEP 2) - BISA KOSONG (NULLABLE)
+            $table->decimal('panel_capacity_wp', 12, 2)->nullable();
+            $table->decimal('inverter_capacity_kw', 10, 2)->nullable();
+            $table->decimal('area_size_m2', 10, 2)->nullable();
+            $table->integer('number_of_panels')->nullable();
+            $table->date('installation_date')->nullable();
+            $table->string('installation_type')->nullable();
+            $table->string('panel_brand')->nullable();
+            $table->string('inverter_brand')->nullable();
 
             // VERIFICATION FLOW
             $table->enum('status',[
