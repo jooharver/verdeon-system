@@ -8,7 +8,8 @@ class Project extends Model
 {
     protected $fillable = [
         'issuer_id',
-        'active_version_id'
+        'active_version_id',
+        'tx_hash',
     ];
 
     public function issuer()

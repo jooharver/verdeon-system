@@ -444,34 +444,41 @@ class ProjectController extends Controller
         ]);
     }
     
-    // ===============================
-    // ADMIN FINAL LISTING
-    // ===============================
-    public function adminListProject($id)
+    //ADMIN LIST PROJECT (FINAL APPROVAL + MINT NFT)
+    public function adminListProject(Request $request, $id)
     {
-        $project = Project::findOrFail($id);
-        $version = $project->activeVersion;
+        try {
+            $project = Project::findOrFail($id);
+            $version = $project->activeVersion;
 
-        if ($version->auditor_verification_status !== 'approved') {
-            return response()->json([
-                'message'=>'Version not verified by auditor'
-            ],403);
-        }
+            if ($version->auditor_verification_status !== 'approved') {
+                return response()->json(['message'=>'Version not verified by auditor'],403);
+            }
 
-        if ($version->status === 'listed') {
+            if ($version->status === 'listed') {
+                return response()->json(['message'=>'Already listed'], 400);
+            }
+
+            // Update status
+            $version->update(['status'=>'listed']);
+
+            // Simpan tx_hash
+            if ($request->has('tx_hash')) {
+                $project->update(['tx_hash' => $request->tx_hash]);
+            }
+
             return response()->json([
-                'message'=>'Already listed'
+                'message'=>'Project version officially listed and NFT minted',
+                'version'=>$version,
+                'tx_hash'=>$project->tx_hash
             ]);
+
+        } catch (\Exception $e) {
+            // 👇 INI KUNCINYA: Menangkap error asli dari Laravel 👇
+            return response()->json([
+                'message' => 'Error Laravel: ' . $e->getMessage()
+            ], 500);
         }
-
-        $version->update([
-            'status'=>'listed'
-        ]);
-
-        return response()->json([
-            'message'=>'Project version officially listed',
-            'version'=>$version
-        ]);
     }
     
     // ===============================
