@@ -2,36 +2,37 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class AuditReport extends Model
 {
-    use HasFactory;
-
-    // Menentukan kolom mana saja yang boleh diisi (mass assignable)
+    // Mendaftarkan kolom-kolom agar bisa diisi (Mass Assignment)
     protected $fillable = [
         'project_version_id',
         'auditor_id',
+        'calculation_method',
         'verified_installed_capacity_kwp',
-        'verified_annual_generation_kwh',
+        'verified_generation_kwh',
         'baseline_emission_factor',
-        'expected_carbon_reduction_ton_per_year',
+        'carbon_reduction_amount_ton',
+        'verification_checklist',
         'onsite_measurement_date',
         'audit_notes',
     ];
 
-    /**
-     * Relasi ke versi proyek yang diaudit
-     */
-    public function version()
+    // Mengubah JSON otomatis menjadi Array di Laravel
+    protected $casts = [
+        'verification_checklist' => 'array',
+        'onsite_measurement_date' => 'date',
+    ];
+
+    // Relasi ke versi proyek yang diaudit
+    public function projectVersion()
     {
-        return $this->belongsTo(ProjectVersion::class, 'project_version_id');
+        return $this->belongsTo(ProjectVersion::class);
     }
 
-    /**
-     * Relasi ke user yang menjadi auditor
-     */
+    // Relasi ke auditor yang melakukan audit
     public function auditor()
     {
         return $this->belongsTo(User::class, 'auditor_id');

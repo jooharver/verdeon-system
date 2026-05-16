@@ -11,24 +11,30 @@ return new class extends Migration
         Schema::create('audit_reports', function (Blueprint $table) {
             $table->id();
             
-            // Relasi ke versi proyek yang diaudit
-            $table->foreignId('project_version_id')
-                  ->constrained()
-                  ->cascadeOnDelete();
-                  
-            // Relasi ke auditor yang melakukan tugas
-            $table->foreignId('auditor_id')
-                  ->constrained('users')
-                  ->cascadeOnDelete();
+            $table->foreignId('project_version_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('auditor_id')->constrained('users')->cascadeOnDelete();
 
+            // Kolom period_start dan period_end DIHAPUS dari sini
+
+            // Transparansi Metode Kalkulasi
+            $table->enum('calculation_method', [
+                'system_estimated', 
+                'actual_inverter'
+            ])->default('system_estimated');
+            
             // Data Teknis Terverifikasi
             $table->decimal('verified_installed_capacity_kwp', 10, 2);
-            $table->decimal('verified_annual_generation_kwh', 15, 2);
+            $table->decimal('verified_generation_kwh', 15, 2); 
             $table->decimal('baseline_emission_factor', 8, 4);
-            $table->decimal('expected_carbon_reduction_ton_per_year', 15, 2);
-            $table->date('onsite_measurement_date');
             
-            // Keputusan & Catatan
+            // Kalkulasi Otomatis
+            $table->decimal('carbon_reduction_amount_ton', 15, 2); 
+            
+            // Checklist Verifikasi Auditor
+            $table->json('verification_checklist')->nullable();
+            
+            // Opsional jika metode estimasi tidak butuh cek lapangan
+            $table->date('onsite_measurement_date')->nullable();
             $table->text('audit_notes')->nullable();
             
             $table->timestamps();

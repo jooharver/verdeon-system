@@ -22,22 +22,25 @@ return new class extends Migration
             $table->string('name');
             $table->text('description')->nullable();
 
-            $table->string('location_country');
-            $table->string('location_province');
-            $table->string('location_city');
+            // LOKASI TERSTANDARISASI (Relasi ke tabel Wilayah)
+            $table->string('kode_provinsi', 2);
+            $table->string('kode_kota', 5);
+            $table->string('kode_kecamatan', 8);
+            $table->string('kode_kelurahan', 13);
             $table->text('address');
 
             $table->string('project_type')->default('solar');
 
-            // TECHNICAL SPECIFICATIONS (STEP 2) - BISA KOSONG (NULLABLE)
-            $table->decimal('panel_capacity_wp', 12, 2)->nullable();
+            // TECHNICAL SPECIFICATIONS (STEP 2)
+            $table->decimal('total_system_capacity_kwp', 10, 2)->nullable();
             $table->decimal('inverter_capacity_kw', 10, 2)->nullable();
-            $table->decimal('area_size_m2', 10, 2)->nullable();
-            $table->integer('number_of_panels')->nullable();
             $table->date('installation_date')->nullable();
-            $table->string('installation_type')->nullable();
             $table->string('panel_brand')->nullable();
             $table->string('inverter_brand')->nullable();
+
+            // 👉 NEW: CLAIM PERIOD (Diusulkan oleh Issuer)
+            $table->date('period_start')->nullable();
+            $table->date('period_end')->nullable();
 
             // VERIFICATION FLOW
             $table->enum('status',[

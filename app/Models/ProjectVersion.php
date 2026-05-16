@@ -7,28 +7,29 @@ use Illuminate\Database\Eloquent\Model;
 class ProjectVersion extends Model
 {
     protected $fillable = [
-
         'project_id',
         'version_number',
 
         // General Info
         'name',
         'description',
-        'location_country',
-        'location_province',
-        'location_city',
+        'kode_provinsi',
+        'kode_kota',
+        'kode_kecamatan',
+        'kode_kelurahan',
         'address',
         'project_type',
 
         // Technical Specs
-        'panel_capacity_wp',
+        'total_system_capacity_kwp',
         'inverter_capacity_kw',
-        'area_size_m2',
-        'number_of_panels',
         'installation_date',
-        'installation_type',
         'panel_brand',
         'inverter_brand',
+
+        // Claim Period (Baru)
+        'period_start',
+        'period_end',
 
         // Status & Workflow
         'status',
@@ -39,6 +40,15 @@ class ProjectVersion extends Model
         'admin_notes',
         'auditor_notes'
     ];
+
+    // Casting agar tipe datanya dibaca sebagai format Date oleh Laravel
+    protected $casts = [
+        'installation_date' => 'date',
+        'period_start' => 'date',
+        'period_end' => 'date',
+    ];
+
+    // --- RELASI KE ENTITAS PROYEK ---
 
     public function project()
     {
@@ -53,5 +63,27 @@ class ProjectVersion extends Model
     public function auditReport()
     {
         return $this->hasOne(AuditReport::class, 'project_version_id');
+    }
+
+    // --- RELASI KE DATA WILAYAH ---
+
+    public function provinsi()
+    {
+        return $this->belongsTo(Wilayah::class, 'kode_provinsi', 'kode');
+    }
+
+    public function kota()
+    {
+        return $this->belongsTo(Wilayah::class, 'kode_kota', 'kode');
+    }
+
+    public function kecamatan()
+    {
+        return $this->belongsTo(Wilayah::class, 'kode_kecamatan', 'kode');
+    }
+
+    public function kelurahan()
+    {
+        return $this->belongsTo(Wilayah::class, 'kode_kelurahan', 'kode');
     }
 }
