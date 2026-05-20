@@ -311,6 +311,9 @@ class ProjectController extends Controller
         }
     }
 
+    // ===============================
+    // ISSUER SUBMIT PROJECT
+    // ===============================
     public function submit($id)
     {
         $project = Project::findOrFail($id);
@@ -324,7 +327,6 @@ class ProjectController extends Controller
             return response()->json(['message'=>'Already submitted'],400);
         }
 
-        // 👉 UPDATE: Pastikan Issuer sudah mengisi Claim Period sebelum submit
         if (!$version->period_start || !$version->period_end) {
             return response()->json(['message' => 'Claim Period (Start & End Date) harus diisi sebelum disubmit.'], 400);
         }
@@ -334,9 +336,13 @@ class ProjectController extends Controller
             'is_locked'=>true
         ]);
 
+        // 👉 NEW: Buat snapshot saat Issuer klik Submit
+        $dataHash = $this->saveSnapshot($project, $version, 'submitted');
+
         return response()->json([
             'message'=>'Version submitted',
-            'version'=>$version
+            'version'=>$version,
+            'dataHash'=>$dataHash // Kirim balik hash-nya
         ]);
     }
 
