@@ -26,6 +26,8 @@ Route::get('/projects/{project}/versions/{version}/metadata', [MetadataControlle
 // 👇 INI ROUTE SNAPSHOT BARU YANG DITAMBAHKAN 👇
 Route::get('/projects/{projectId}/versions/{versionId}/snapshot/{status}', [ProjectController::class, 'getSnapshot']);
 
+//Route untuk menampilkan semua proyek yang sudah listing di market tanpa mempedulikan role
+Route::get('/market/projects', [App\Http\Controllers\ProjectController::class, 'getMarketProjects']);
 
 Route::middleware('auth:sanctum')->group(function () {
 
