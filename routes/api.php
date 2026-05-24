@@ -34,6 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::patch('/profile',[AuthController::class,'updateProfile']);
+    Route::post('/profile/wallet', [AuthController::class, 'updateWallet']);
     Route::get('/projects/{id}',[ProjectController::class,'show']);
     Route::get('/projects/{id}/versions',[ProjectController::class,'versions']);
     Route::get('/projects/{projectId}/versions/{versionId}',[ProjectController::class,'showVersion']);

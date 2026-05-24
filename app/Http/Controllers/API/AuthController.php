@@ -74,6 +74,38 @@ class AuthController extends Controller
             'token' => $token
         ]);
     }
+    public function updateWallet(Request $request)
+    {
+        // Validasi ketat format Wallet Ethereum/Polygon
+        $request->validate([
+            'wallet_address' => ['required', 'string', 'regex:/^0x[a-fA-F0-9]{40}$/i']
+        ], [
+            'wallet_address.regex' => 'Format Wallet Address tidak valid! Harus berformat Web3 (0x...).',
+            'wallet_address.required' => 'Wallet Address tidak boleh kosong.'
+        ]);
+
+        $user = Auth::user();
+
+        // Cek apakah wallet sudah dipakai user lain
+        $existingUser = \App\Models\User::where('wallet_address', $request->wallet_address)
+                                        ->where('id', '!=', $user->id)
+                                        ->first();
+        
+        if ($existingUser) {
+            return response()->json([
+                'message' => 'Wallet Address ini sudah tertaut dengan akun Verdeon lain.'
+            ], 422);
+        }
+
+        // Simpan ke database
+        $user->wallet_address = $request->wallet_address;
+        $user->save();
+
+        return response()->json([
+            'message' => 'Wallet Address berhasil ditautkan.',
+            'user' => $user // Mengembalikan object user agar sinkron dengan struktur AuthContext.js
+        ]);
+    }
 
     public function updateProfile(Request $request)
     {
