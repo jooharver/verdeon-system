@@ -23,34 +23,37 @@ Route::get('/wilayah/kelurahan', [WilayahController::class, 'getKelurahan']);
 // ==========================================
 Route::get('/projects/{project}/versions/{version}/metadata', [MetadataController::class, 'generateMetadata']);
 
-// 👇 INI ROUTE SNAPSHOT BARU YANG DITAMBAHKAN 👇
+// Route Snapshot yang ditambahkan
 Route::get('/projects/{projectId}/versions/{versionId}/snapshot/{status}', [ProjectController::class, 'getSnapshot']);
 
-//Route untuk menampilkan semua proyek yang sudah listing di market tanpa mempedulikan role
-Route::get('/market/projects', [App\Http\Controllers\ProjectController::class, 'getMarketProjects']);
+// Route untuk menampilkan semua proyek yang sudah listing di market tanpa mempedulikan role
+Route::get('/market/projects', [ProjectController::class, 'getMarketProjects']);
 
 Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
-    Route::patch('/profile',[AuthController::class,'updateProfile']);
+    Route::patch('/profile', [AuthController::class, 'updateProfile']);
     Route::post('/profile/wallet', [AuthController::class, 'updateWallet']);
-    Route::get('/projects/{id}',[ProjectController::class,'show']);
-    Route::get('/projects/{id}/versions',[ProjectController::class,'versions']);
-    Route::get('/projects/{projectId}/versions/{versionId}',[ProjectController::class,'showVersion']);
+    Route::get('/projects/{id}', [ProjectController::class, 'show']);
+    Route::get('/projects/{id}/versions', [ProjectController::class, 'versions']);
+    Route::get('/projects/{projectId}/versions/{versionId}', [ProjectController::class, 'showVersion']);
     Route::post('/projects/{id}/save-tx', [ProjectController::class, 'saveTxHash']);
+
+    // 👉 NEW: Route untuk Revert Status (Fail-Safe)
+    Route::post('/projects/{id}/revert-status', [ProjectController::class, 'revertStatus']);
 
     // ISSUER ONLY
     Route::middleware('role:issuer')->group(function () {
         Route::get('/issuer/dashboard', fn() => response()->json([
             'message' => 'Issuer access granted'
         ]));
-        Route::post('/projects',[ProjectController::class,'store']);
-        Route::patch('/projects/{id}',[ProjectController::class,'update']);
-        Route::post('/projects/{id}/submit',[ProjectController::class,'submit']);
-        Route::get('/issuer/projects',[ProjectController::class,'issuerProjects']);
-        Route::post('/projects/{id}/revise',[ProjectController::class,'reviseProject']);
-        Route::delete('/projects/{id}',[ProjectController::class,'destroy']);
+        Route::post('/projects', [ProjectController::class, 'store']);
+        Route::patch('/projects/{id}', [ProjectController::class, 'update']);
+        Route::post('/projects/{id}/submit', [ProjectController::class, 'submit']);
+        Route::get('/issuer/projects', [ProjectController::class, 'issuerProjects']);
+        Route::post('/projects/{id}/revise', [ProjectController::class, 'reviseProject']);
+        Route::delete('/projects/{id}', [ProjectController::class, 'destroy']);
     });
 
     // ADMIN ONLY
@@ -59,15 +62,19 @@ Route::middleware('auth:sanctum')->group(function () {
             'message' => 'Admin access granted'
         ]));
         // USER MANAGEMENT
-        Route::post('/admin/users',[UserController::class,'store']);
-        Route::get('/admin/users',[UserController::class,'index']);
-        Route::delete('/admin/users/{id}',[UserController::class,'destroy']);
-        //Project Management
-        Route::get('/admin/projects',[ProjectController::class,'adminList']);
-        Route::post('/admin/projects/{id}/approve',[ProjectController::class,'adminApprove']);
-        Route::post('/admin/projects/{id}/reject',[ProjectController::class,'adminReject']);
-        Route::post('/admin/projects/{id}/list',[ProjectController::class,'adminListProject']);
-        Route::get('/admin/projects/listing-queue',[ProjectController::class,'adminListingQueue']);
+        Route::post('/admin/users', [UserController::class, 'store']);
+        Route::get('/admin/users', [UserController::class, 'index']);
+        Route::delete('/admin/users/{id}', [UserController::class, 'destroy']);
+        
+        // PROJECT MANAGEMENT
+        Route::get('/admin/projects', [ProjectController::class, 'adminList']);
+        Route::post('/admin/projects/{id}/approve', [ProjectController::class, 'adminApprove']);
+        Route::post('/admin/projects/{id}/reject', [ProjectController::class, 'adminReject']);
+        Route::post('/admin/projects/{id}/list', [ProjectController::class, 'adminListProject']);
+        Route::get('/admin/projects/listing-queue', [ProjectController::class, 'adminListingQueue']);
+        
+        // 👉 NEW: Route untuk Admin mengembalikan laporan ke Auditor
+        Route::post('/admin/projects/{id}/reject-auditor', [ProjectController::class, 'adminRejectAuditor']);
     });
 
     // AUDITOR ONLY
@@ -76,15 +83,10 @@ Route::middleware('auth:sanctum')->group(function () {
             'message' => 'Auditor access granted'
         ]));
         
-        Route::get('/auditor/projects',[ProjectController::class,'auditorList']);
+        Route::get('/auditor/projects', [ProjectController::class, 'auditorList']);
 
-        Route::post('/auditor/projects/{id}/verify',
-            [ProjectController::class,'auditorVerify']
-        );
+        Route::post('/auditor/projects/{id}/verify', [ProjectController::class, 'auditorVerify']);
 
-        Route::post('/auditor/projects/{id}/reject',
-            [ProjectController::class,'auditorReject']
-        );
-        
+        Route::post('/auditor/projects/{id}/reject', [ProjectController::class, 'auditorReject']);
     });
 });

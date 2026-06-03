@@ -38,7 +38,7 @@ return new class extends Migration
             $table->string('panel_brand')->nullable();
             $table->string('inverter_brand')->nullable();
 
-            // 👉 NEW: CLAIM PERIOD (Diusulkan oleh Issuer)
+            // CLAIM PERIOD (Diusulkan oleh Issuer)
             $table->date('period_start')->nullable();
             $table->date('period_end')->nullable();
 
@@ -48,6 +48,7 @@ return new class extends Migration
                 'submitted',
                 'admin_approved',
                 'auditor_verified',
+                'returned_to_auditor', // 👉 NEW: Status ditolak oleh Admin untuk direvisi Auditor
                 'rejected',
                 'listed'
             ])->default('draft');
@@ -57,7 +58,7 @@ return new class extends Migration
             ])->default('pending');
 
             $table->enum('auditor_verification_status',[
-                'pending','approved','rejected'
+                'pending','approved','revision','rejected' // 👉 NEW: Status 'revision' ditambahkan
             ])->default('pending');
 
             $table->boolean('is_locked')->default(false);

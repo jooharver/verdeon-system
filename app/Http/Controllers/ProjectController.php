@@ -35,7 +35,7 @@ class ProjectController extends Controller
             ["trait_type" => "Total Capacity (kWp)", "value" => (string)$version->total_system_capacity_kwp],
         ];
 
-        if (in_array($version->status, ['auditor_verified', 'listed']) && $version->auditReport) {
+        if (in_array($version->status, ['auditor_verified', 'listed', 'returned_to_auditor']) && $version->auditReport) {
             $audit = $version->auditReport;
             $attributes[] = ["trait_type" => "Auditor", "value" => $audit->auditor->name ?? "Auditor"];
             
@@ -104,10 +104,8 @@ class ProjectController extends Controller
         return $dataHash;
     }
     
-    //GET ALL PROJECTS YANG SUDAH LISTING DI MARKETPLACE (UNTUK DITAMPILKAN DI MARKETPLACE TANPA MEMPEDULIKAN ROLE)
     public function getMarketProjects()
     {
-        // Mengambil proyek yang statusnya 'listed' saja
         $projects = Project::with([
             'issuer', 
             'activeVersion.documents', 
@@ -530,7 +528,6 @@ class ProjectController extends Controller
                 'is_locked'=>false
             ]);
 
-            // 👉 FIX: Status diubah menjadi murni 'rejected' agar cocok dengan pencarian URI di React
             $dataHash = $this->saveSnapshot($project, $version, 'admin_rejected');
 
             if ($request->has('tx_hash')) {
@@ -547,7 +544,7 @@ class ProjectController extends Controller
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
-    
+
     public function adminListProject(Request $request, $id)
     {
         try {
@@ -588,6 +585,49 @@ class ProjectController extends Controller
             ], 500);
         }
     }
+
+    // ==========================================
+    // 👉 NEW: ADMIN REJECT AUDITOR REPORT
+    // ==========================================
+    public function adminRejectAuditor(Request $request, $projectId)
+    {
+        $request->validate(['note' => 'required|string']);
+
+        $project = Project::with('activeVersion')->findOrFail($projectId);
+        $version = $project->activeVersion;
+
+        // Pastikan status proyek sedang diverifikasi auditor dan masuk tahap finalisasi
+        if ($version->status !== 'auditor_verified') {
+            return response()->json(['message'=>'Proyek belum diverifikasi oleh Auditor atau sudah di-listing.'], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            // Kita mundurkan statusnya, buka gembok, dan simpan catatan
+            $version->update([
+                'status' => 'returned_to_auditor', // Status utama eksklusif
+                'auditor_verification_status' => 'revision', // 👉 FIX: Gunakan 'revision', bukan 'rejected'
+                'admin_notes' => $request->note, 
+                'is_locked' => false // Buka gembok agar form audit bisa diisi ulang
+            ]);
+
+            // Cetak snapshot JSON baru untuk di-hash ke blockchain
+            $dataHash = $this->saveSnapshot($project, $version, 'returned_to_auditor');
+
+            if ($request->has('tx_hash')) {
+                $project->update(['tx_hash' => $request->tx_hash]);
+            }
+
+            DB::commit();
+            return response()->json([
+                'message'=>'Laporan dikembalikan ke Auditor untuk direvisi.',
+                'dataHash' => $dataHash
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
     
     public function adminListingQueue()
     {
@@ -622,7 +662,8 @@ class ProjectController extends Controller
             }
         ])
         ->whereHas('activeVersion', function ($q) {
-            $q->where('admin_verification_status', 'approved');
+            // Auditor melihat proyek yang sudah admin_approved ATAU yang dikembalikan dari finalisasi admin
+            $q->whereIn('status', ['admin_approved', 'returned_to_auditor']); 
         })
         ->latest()
         ->get();
@@ -638,16 +679,18 @@ class ProjectController extends Controller
             'baseline_emission_factor' => 'required|numeric|min:0',
             'onsite_measurement_date' => 'nullable|date', 
             'audit_notes' => 'nullable|string',
-            'audit_documents.*' => 'required|mimes:pdf|max:10240',
+            // Dokumen hanya wajib jika baru submit pertama kali, kalau revisi boleh nullable
+            'audit_documents.*' => 'nullable|mimes:pdf|max:10240', 
             'audit_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
             'verified_generation_kwh' => 'required_if:calculation_method,actual_inverter|nullable|numeric|min:0',
         ]);
 
-        $project = Project::with('activeVersion')->findOrFail($projectId);
+        $project = Project::with('activeVersion', 'activeVersion.auditReport')->findOrFail($projectId);
         $version = $project->activeVersion;
 
-        if ($version->status !== 'admin_approved') {
-            return response()->json(['message' => 'Proyek belum siap atau belum disetujui oleh Admin untuk diaudit.'], 400);
+        // Auditor bisa submit kalau statusnya admin_approved atau sedang revisi (returned_to_auditor)
+        if (!in_array($version->status, ['admin_approved', 'returned_to_auditor'])) {
+            return response()->json(['message' => 'Proyek belum siap atau sedang terkunci.'], 400);
         }
 
         $capacity = $version->total_system_capacity_kwp;
@@ -683,32 +726,49 @@ class ProjectController extends Controller
 
         $calculatedCarbonReduction = ($finalGenerationKwh / 1000) * $request->baseline_emission_factor;
 
-        $hasOverlap = AuditReport::whereHas('projectVersion', function ($query) use ($projectId, $version) {
-            $query->where('project_id', $projectId)
-                  ->where(function ($q) use ($version) {
-                      $q->whereBetween('period_start', [$version->period_start, $version->period_end])
-                        ->orWhereBetween('period_end', [$version->period_start, $version->period_end]);
-                  });
-        })->exists();
+        // Cek overlap hanya jika ini bukan revisi dari audit yang sama
+        if (!$version->auditReport) {
+            $hasOverlap = AuditReport::whereHas('projectVersion', function ($query) use ($projectId, $version) {
+                $query->where('project_id', $projectId)
+                      ->where(function ($q) use ($version) {
+                          $q->whereBetween('period_start', [$version->period_start, $version->period_end])
+                            ->orWhereBetween('period_end', [$version->period_start, $version->period_end]);
+                      });
+            })->exists();
 
-        if ($hasOverlap) {
-            return response()->json(['message' => 'Peringatan Sistem: Periode klaim tumpang tindih dengan data sertifikat audit yang sudah diterbitkan sebelumnya.'], 422); 
+            if ($hasOverlap) {
+                return response()->json(['message' => 'Peringatan Sistem: Periode klaim tumpang tindih dengan data sertifikat audit yang sudah diterbitkan sebelumnya.'], 422); 
+            }
         }
 
         DB::beginTransaction();
         try {
-            AuditReport::create([
-                'project_version_id' => $version->id,
-                'auditor_id' => auth()->id(),
-                'calculation_method' => $request->calculation_method, 
-                'verification_checklist' => $request->verification_checklist, 
-                'verified_installed_capacity_kwp' => $capacity, 
-                'verified_generation_kwh' => $finalGenerationKwh, 
-                'baseline_emission_factor' => $request->baseline_emission_factor,
-                'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
-                'onsite_measurement_date' => $request->onsite_measurement_date,
-                'audit_notes' => $request->audit_notes,
-            ]);
+            // Update atau Create Audit Report
+            if ($version->auditReport) {
+                $version->auditReport->update([
+                    'calculation_method' => $request->calculation_method, 
+                    'verification_checklist' => $request->verification_checklist, 
+                    'verified_installed_capacity_kwp' => $capacity, 
+                    'verified_generation_kwh' => $finalGenerationKwh, 
+                    'baseline_emission_factor' => $request->baseline_emission_factor,
+                    'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
+                    'onsite_measurement_date' => $request->onsite_measurement_date,
+                    'audit_notes' => $request->audit_notes,
+                ]);
+            } else {
+                AuditReport::create([
+                    'project_version_id' => $version->id,
+                    'auditor_id' => auth()->id(),
+                    'calculation_method' => $request->calculation_method, 
+                    'verification_checklist' => $request->verification_checklist, 
+                    'verified_installed_capacity_kwp' => $capacity, 
+                    'verified_generation_kwh' => $finalGenerationKwh, 
+                    'baseline_emission_factor' => $request->baseline_emission_factor,
+                    'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
+                    'onsite_measurement_date' => $request->onsite_measurement_date,
+                    'audit_notes' => $request->audit_notes,
+                ]);
+            }
 
             if ($request->hasFile('audit_documents')) {
                 foreach ($request->file('audit_documents') as $file) {
@@ -738,10 +798,13 @@ class ProjectController extends Controller
 
             $version->update([
                 'auditor_verification_status' => 'approved',
-                'status' => 'auditor_verified'
+                'status' => 'auditor_verified',
+                'is_locked' => true // Kunci lagi agar tidak bisa diedit sembarangan
             ]);
 
-            $dataHash = $this->saveSnapshot($project, $version, 'auditor_verified');
+            // Jika status sebelumnya 'returned_to_auditor', berarti ini revisi audit. 
+            $statusName = $version->status === 'returned_to_auditor' ? 'auditor_verified_revision' : 'auditor_verified';
+            $dataHash = $this->saveSnapshot($project, $version, $statusName);
 
             DB::commit();
             
@@ -777,7 +840,6 @@ class ProjectController extends Controller
                 'is_locked'=>false
             ]);
 
-            // 👉 FIX: Status diubah menjadi murni 'rejected' agar cocok dengan pencarian URI di React
             $dataHash = $this->saveSnapshot($project, $version, 'auditor_rejected');
 
             if ($request->has('tx_hash')) {
@@ -835,7 +897,7 @@ class ProjectController extends Controller
     }
 
     // ==========================================
-    // 👉 NEW: FUNGSI REVERT STATUS (FAIL-SAFE)
+    // 👉 FUNGSI REVERT STATUS (FAIL-SAFE)
     // ==========================================
     public function revertStatus(Request $request, $id)
     {
@@ -848,7 +910,6 @@ class ProjectController extends Controller
 
         DB::beginTransaction();
         try {
-            // 1. Kembalikan status version
             $version->update([
                 'status' => $request->previous_status,
                 'admin_verification_status' => $request->previous_status === 'submitted' ? 'pending' : $version->admin_verification_status,
@@ -856,16 +917,10 @@ class ProjectController extends Controller
                 'is_locked' => in_array($request->previous_status, ['submitted', 'admin_approved', 'auditor_verified']) ? true : false
             ]);
 
-            // 2. Hapus snapshot terbaru jika statusnya tidak sama dengan previous_status (rollback)
             $latestSnapshot = ProjectSnapshot::where('project_version_id', $version->id)->latest()->first();
             if ($latestSnapshot && $latestSnapshot->status_at_snapshot !== $request->previous_status) {
                 $latestSnapshot->delete();
             }
-
-            // 3. Jika proyek belum punya NFT di awal, kita bisa pastikan tx_hash dihapus
-            // Tapi karena bisa jadi ini dari proses revisi yang sudah punya tx_hash,
-            // lebih aman kita tidak menyentuh tx_hash yang sudah legitimate (misal dari submitted).
-            // Aturan ini bisa disesuaikan jika ingin mengosongkan tx_hash proyek yang baru dibuat.
             
             DB::commit();
             return response()->json(['message' => 'Status berhasil dikembalikan ke ' . $request->previous_status]);
