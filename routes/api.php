@@ -23,8 +23,11 @@ Route::get('/wilayah/kelurahan', [WilayahController::class, 'getKelurahan']);
 // ==========================================
 Route::get('/projects/{project}/versions/{version}/metadata', [MetadataController::class, 'generateMetadata']);
 
-// Route Snapshot yang ditambahkan
-Route::get('/projects/{projectId}/versions/{versionId}/snapshot/{status}', [ProjectController::class, 'getSnapshot']);
+// Route Pintu 1 (Immutable ID untuk Blockchain)
+Route::get('/snapshots/{id}', [App\Http\Controllers\ProjectController::class, 'getSnapshotById']);
+
+// Route Pintu 2 (Untuk internal pencarian Frontend)
+Route::get('/projects/{project}/versions/{version}/snapshot/{status}', [App\Http\Controllers\ProjectController::class, 'getSnapshotByStatus']);
 
 // Route untuk menampilkan semua proyek yang sudah listing di market tanpa mempedulikan role
 Route::get('/market/projects', [ProjectController::class, 'getMarketProjects']);

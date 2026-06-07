@@ -15,6 +15,7 @@ class ProjectSnapshot extends Model
         'status_at_snapshot',
         'snapshot_data',
         'data_hash',
+        'tx_hash',
     ];
 
     protected $casts = [

@@ -40,8 +40,16 @@ class MetadataController extends Controller
                 ["trait_type" => "Total Capacity (kWp)", "value" => (string)$version->total_system_capacity_kwp],
             ];
 
+            // 👉 NEW: INJEKSI CATATAN REVISI AGAR TRANSPARAN DI BLOCKCHAIN
+            if (!empty($version->admin_notes)) {
+                $attributes[] = ["trait_type" => "Admin Revision Notes", "value" => $version->admin_notes];
+            }
+            if (!empty($version->auditor_notes)) {
+                $attributes[] = ["trait_type" => "Auditor Revision Notes", "value" => $version->auditor_notes];
+            }
+
             // Masukkan data auditor jika statusnya mencukupi
-            if (in_array($currentStatus, ['auditor_verified', 'listed']) && $version->auditReport) {
+            if (in_array($currentStatus, ['auditor_verified', 'listed', 'returned_to_auditor']) && $version->auditReport) {
                 $audit = $version->auditReport;
                 $attributes[] = ["trait_type" => "Auditor", "value" => $audit->auditor->name ?? "Auditor"];
                 
@@ -52,7 +60,11 @@ class MetadataController extends Controller
                 $attributes[] = ["trait_type" => "Verified Generation (kWh)", "value" => (string)$audit->verified_generation_kwh];
                 $attributes[] = ["trait_type" => "Carbon Reduction (Ton)", "value" => (string)$audit->carbon_reduction_amount_ton];
                 
-                // 👉 UPDATE: Ambil date dari projectVersion
+                // 👉 NEW: INJEKSI CATATAN LAPORAN AUDITOR
+                if (!empty($audit->audit_notes)) {
+                    $attributes[] = ["trait_type" => "Auditor Report Notes", "value" => $audit->audit_notes];
+                }
+
                 $attributes[] = ["trait_type" => "Period Start", "value" => $version->period_start ? $version->period_start->format('Y-m-d') : '-'];
                 $attributes[] = ["trait_type" => "Period End", "value" => $version->period_end ? $version->period_end->format('Y-m-d') : '-'];
             }
@@ -90,7 +102,7 @@ class MetadataController extends Controller
                 "documents" => $documents
             ];
 
-            // --- 2. FORMAT JSON KONSISTEN (SAMA PERSIS DENGAN SNAPSHOT) ---
+            // --- 2. FORMAT JSON KONSISTEN ---
             $jsonString = json_encode(["metadata" => $metadata], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
             // --- 3. HASHING KONSISTEN ---

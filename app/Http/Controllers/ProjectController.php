@@ -16,6 +16,11 @@ class ProjectController extends Controller
     // ==========================================
     // HELPER: GENERATE METADATA KONSISTEN
     // ==========================================
+    
+    /**
+     * Membentuk struktur metadata proyek untuk kebutuhan snapshot atau blockchain.
+     * Menggabungkan data proyek, lokasi, kapasitas, dan catatan audit/admin.
+     */
     private function generateMetadataArray($project, $version)
     {
         $locationName = '';
@@ -35,41 +40,43 @@ class ProjectController extends Controller
             ["trait_type" => "Total Capacity (kWp)", "value" => (string)$version->total_system_capacity_kwp],
         ];
 
+        if (!empty($version->admin_notes)) {
+            $attributes[] = ["trait_type" => "Admin Revision Notes", "value" => $version->admin_notes];
+        }
+        
+        if (!empty($version->auditor_notes)) {
+            $attributes[] = ["trait_type" => "Auditor Revision Notes", "value" => $version->auditor_notes];
+        }
+
         if (in_array($version->status, ['auditor_verified', 'listed', 'returned_to_auditor']) && $version->auditReport) {
             $audit = $version->auditReport;
             $attributes[] = ["trait_type" => "Auditor", "value" => $audit->auditor->name ?? "Auditor"];
             
             $methodName = $audit->calculation_method === 'system_estimated' ? 'Conservative System Estimation' : 'Actual Inverter Data';
             $attributes[] = ["trait_type" => "Calculation Method", "value" => $methodName];
-            
             $attributes[] = ["trait_type" => "Verified Capacity (kWp)", "value" => (string)$audit->verified_installed_capacity_kwp];
             $attributes[] = ["trait_type" => "Verified Generation (kWh)", "value" => (string)$audit->verified_generation_kwh];
             $attributes[] = ["trait_type" => "Carbon Reduction (Ton)", "value" => (string)$audit->carbon_reduction_amount_ton];
             
+            if (!empty($audit->audit_notes)) {
+                $attributes[] = ["trait_type" => "Auditor Report Notes", "value" => $audit->audit_notes];
+            }
             $attributes[] = ["trait_type" => "Period Start", "value" => $version->period_start ? $version->period_start->format('Y-m-d') : '-'];
             $attributes[] = ["trait_type" => "Period End", "value" => $version->period_end ? $version->period_end->format('Y-m-d') : '-'];
         }
 
-        $images = [];
-        $documents = [];
+        $images = []; 
+        $documents = []; 
         $mainImage = null;
-
+        
         if ($version->documents) {
             foreach ($version->documents as $doc) {
                 $url = asset('storage/' . $doc->file_path); 
                 if ($doc->type === 'image') {
                     if (!$mainImage) $mainImage = $url;
-                    $images[] = [
-                        "name" => $doc->original_filename,
-                        "url" => $url,
-                        "role" => $doc->uploader_role
-                    ];
+                    $images[] = ["name" => $doc->original_filename, "url" => $url, "role" => $doc->uploader_role];
                 } else {
-                    $documents[] = [
-                        "name" => $doc->original_filename,
-                        "url" => $url,
-                        "role" => $doc->uploader_role
-                    ];
+                    $documents[] = ["name" => $doc->original_filename, "url" => $url, "role" => $doc->uploader_role];
                 }
             }
         }
@@ -84,6 +91,10 @@ class ProjectController extends Controller
         ];
     }
 
+    /**
+     * Helper untuk menyimpan snapshot data proyek beserta hash-nya.
+     * Biasanya dipanggil saat terjadi perubahan status penting.
+     */
     private function saveSnapshot($project, $version, $status)
     {
         $project->loadMissing(['issuer']);
@@ -93,7 +104,7 @@ class ProjectController extends Controller
         $jsonString = json_encode(["metadata" => $metadataArray], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $dataHash = hash('sha256', $jsonString);
 
-        ProjectSnapshot::create([
+        $snapshot = ProjectSnapshot::create([
             'project_id' => $project->id,
             'project_version_id' => $version->id,
             'status_at_snapshot' => $status,
@@ -101,105 +112,101 @@ class ProjectController extends Controller
             'data_hash' => $dataHash
         ]);
 
-        return $dataHash;
+        return [
+            'dataHash' => $dataHash,
+            'snapshotUri' => url("/api/snapshots/{$snapshot->id}"),
+            'snapshotId' => $snapshot->id // 👉 ID GENERATED HERE
+        ];
     }
     
+    /**
+     * Menampilkan daftar proyek yang sudah diverifikasi dan rilis (listed) di market.
+     */
     public function getMarketProjects()
     {
         $projects = Project::with([
-            'issuer', 
-            'activeVersion.documents', 
-            'activeVersion.auditReport.auditor',
-            'activeVersion.provinsi',
-            'activeVersion.kota'
+            'issuer', 'activeVersion.documents', 'activeVersion.auditReport.auditor',
+            'activeVersion.provinsi', 'activeVersion.kota'
         ])
         ->whereHas('activeVersion', function ($q) {
             $q->where('status', 'listed');
-        })
-        ->latest()
-        ->get();
+        })->latest()->get();
 
         return response()->json($projects);
     }
 
-    // ===============================
-    // ISSUER CREATE PROJECT
-    // ===============================
+    /**
+     * Menyimpan proyek baru (versi 1) dari Issuer ke dalam database.
+     */
     public function store(Request $request)
     {
         $request->validate([
-            'name' => 'required|string',
-            'kode_provinsi' => 'required|string|max:2',
+            'name' => 'required|string', 
+            'kode_provinsi' => 'required|string|max:2', 
             'kode_kota' => 'required|string|max:5',
-            'kode_kecamatan' => 'required|string|max:8',
-            'kode_kelurahan' => 'required|string|max:13',
+            'kode_kecamatan' => 'required|string|max:8', 
+            'kode_kelurahan' => 'required|string|max:13', 
             'address' => 'required',
-            'project_images.*' => 'nullable|image|max:5120',
+            'project_images.*' => 'nullable|image|max:5120', 
             'project_documents.*' => 'nullable|mimes:pdf|max:10240',
-            'total_system_capacity_kwp' => 'nullable|numeric',
+            'total_system_capacity_kwp' => 'nullable|numeric', 
             'inverter_capacity_kw' => 'nullable|numeric',
-            'installation_date' => 'nullable|date',
-            'panel_brand' => 'nullable|string',
+            'installation_date' => 'nullable|date', 
+            'panel_brand' => 'nullable|string', 
             'inverter_brand' => 'nullable|string',
-            'period_start' => 'nullable|date',
+            'period_start' => 'nullable|date', 
             'period_end' => 'nullable|date|after:period_start', 
         ]);
 
         DB::beginTransaction();
         try {
             $project = Project::create(['issuer_id' => Auth::id()]);
-
+            
             $version = ProjectVersion::create([
-                'project_id' => $project->id,
-                'version_number' => 1,
-                'name' => $request->name,
+                'project_id' => $project->id, 
+                'version_number' => 1, 
+                'name' => $request->name, 
                 'description' => $request->description,
-                'kode_provinsi' => $request->kode_provinsi,
-                'kode_kota' => $request->kode_kota,
+                'kode_provinsi' => $request->kode_provinsi, 
+                'kode_kota' => $request->kode_kota, 
                 'kode_kecamatan' => $request->kode_kecamatan,
-                'kode_kelurahan' => $request->kode_kelurahan,
-                'address' => $request->address,
+                'kode_kelurahan' => $request->kode_kelurahan, 
+                'address' => $request->address, 
                 'status' => 'draft',
-                'total_system_capacity_kwp' => $request->total_system_capacity_kwp,
+                'total_system_capacity_kwp' => $request->total_system_capacity_kwp, 
                 'inverter_capacity_kw' => $request->inverter_capacity_kw,
-                'installation_date' => $request->installation_date,
+                'installation_date' => $request->installation_date, 
                 'panel_brand' => $request->panel_brand,
-                'inverter_brand' => $request->inverter_brand,
-                'period_start' => $request->period_start,
+                'inverter_brand' => $request->inverter_brand, 
+                'period_start' => $request->period_start, 
                 'period_end' => $request->period_end,
             ]);
 
             $project->update(['active_version_id' => $version->id]);
             $this->uploadProjectFiles($request, $version->id, 'issuer');
-
+            
             DB::commit();
             return response()->json(['message' => 'Project V1 & Documents created', 'project' => $project]);
         } catch (\Exception $e) {
-            DB::rollBack();
+            DB::rollBack(); 
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
+    /**
+     * Memperbarui detail proyek yang masih berstatus draft atau revisi.
+     */
     public function update(Request $request, $id)
     {
         $request->validate([
-            'name' => 'sometimes|required|string|max:255',
+            'name' => 'sometimes|required|string|max:255', 
             'kode_provinsi' => 'sometimes|required|string|max:2',
-            'kode_kota' => 'sometimes|required|string|max:5',
+            'kode_kota' => 'sometimes|required|string|max:5', 
             'kode_kecamatan' => 'sometimes|required|string|max:8',
-            'kode_kelurahan' => 'sometimes|required|string|max:13',
+            'kode_kelurahan' => 'sometimes|required|string|max:13', 
             'address' => 'sometimes|required|string',
-            'project_type' => 'nullable|string',
-            'description' => 'nullable|string',
-            'project_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
+            'project_images.*' => 'nullable|image|max:5120', 
             'project_documents.*' => 'nullable|mimes:pdf,doc,docx|max:10240',
-            'total_system_capacity_kwp' => 'nullable|numeric',
-            'inverter_capacity_kw' => 'nullable|numeric',
-            'installation_date' => 'nullable|date',
-            'panel_brand' => 'nullable|string',
-            'inverter_brand' => 'nullable|string',
-            'period_start' => 'nullable|date',
-            'period_end' => 'nullable|date|after:period_start', 
         ]);
 
         $project = Project::with('activeVersion')->findOrFail($id);
@@ -208,725 +215,626 @@ class ProjectController extends Controller
         if ($project->issuer_id !== auth()->id()) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
-
         if (!in_array($version->status, ['draft', 'revision'])) {
-            return response()->json(['message' => 'Hanya proyek berstatus Draft yang dapat diedit.'], 400);
+            return response()->json(['message' => 'Hanya draft yang dapat diedit.'], 400);
         }
 
         DB::beginTransaction();
         try {
             $version->update($request->only([
-                'name', 'description', 
-                'kode_provinsi', 'kode_kota', 'kode_kecamatan', 'kode_kelurahan', 
-                'address', 'project_type', 'total_system_capacity_kwp', 
-                'inverter_capacity_kw', 'installation_date', 
+                'name', 'description', 'kode_provinsi', 'kode_kota', 'kode_kecamatan', 'kode_kelurahan', 
+                'address', 'project_type', 'total_system_capacity_kwp', 'inverter_capacity_kw', 'installation_date', 
                 'panel_brand', 'inverter_brand', 'period_start', 'period_end'
             ]));
-
+            
             $this->uploadProjectFiles($request, $version->id, 'issuer');
-
             DB::commit();
-            return response()->json([
-                'message' => 'Draft project updated successfully', 
-                'version' => $version
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+            
+            return response()->json(['message' => 'Draft project updated successfully', 'version' => $version]);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
 
+    /**
+     * Membuat versi proyek baru sebagai revisi setelah sebelumnya ditolak (rejected).
+     */
     public function reviseProject($id)
     {
         $project = Project::with('activeVersion.documents')->findOrFail($id);
         $oldVersion = $project->activeVersion;
 
         if ($oldVersion->status !== 'rejected') {
-            return response()->json(['message' => 'Hanya proyek yang ditolak (rejected) yang dapat direvisi.'], 400);
+            return response()->json(['message' => 'Hanya proyek ditolak yang dapat direvisi.'], 400);
         }
 
         DB::beginTransaction();
         try {
             $newVersion = ProjectVersion::create([
-                'project_id' => $project->id,
-                'version_number' => $oldVersion->version_number + 1,
+                'project_id' => $project->id, 
+                'version_number' => $oldVersion->version_number + 1, 
                 'name' => $oldVersion->name,
-                'description' => $oldVersion->description,
-                'kode_provinsi' => $oldVersion->kode_provinsi,
+                'description' => $oldVersion->description, 
+                'kode_provinsi' => $oldVersion->kode_provinsi, 
                 'kode_kota' => $oldVersion->kode_kota,
-                'kode_kecamatan' => $oldVersion->kode_kecamatan,
-                'kode_kelurahan' => $oldVersion->kode_kelurahan,
+                'kode_kecamatan' => $oldVersion->kode_kecamatan, 
+                'kode_kelurahan' => $oldVersion->kode_kelurahan, 
                 'address' => $oldVersion->address,
-                'project_type' => $oldVersion->project_type,
-                'status' => 'draft',
+                'project_type' => $oldVersion->project_type, 
+                'status' => 'draft', 
                 'total_system_capacity_kwp' => $oldVersion->total_system_capacity_kwp,
-                'inverter_capacity_kw' => $oldVersion->inverter_capacity_kw,
+                'inverter_capacity_kw' => $oldVersion->inverter_capacity_kw, 
                 'installation_date' => $oldVersion->installation_date,
-                'panel_brand' => $oldVersion->panel_brand,
-                'inverter_brand' => $oldVersion->inverter_brand,
+                'panel_brand' => $oldVersion->panel_brand, 
+                'inverter_brand' => $oldVersion->inverter_brand, 
                 'period_start' => $oldVersion->period_start,
                 'period_end' => $oldVersion->period_end,
             ]);
 
+            // Duplikasi dokumen dari versi lama ke versi revisi
             if ($oldVersion->documents) {
                 foreach ($oldVersion->documents as $doc) {
                     ProjectDocument::create([
-                        'project_version_id' => $newVersion->id,
-                        'type' => $doc->type,
+                        'project_version_id' => $newVersion->id, 
+                        'type' => $doc->type, 
                         'original_filename' => $doc->original_filename,
-                        'file_path' => $doc->file_path,
+                        'file_path' => $doc->file_path, 
                         'uploader_role' => $doc->uploader_role
                     ]);
                 }
             }
 
             $project->update(['active_version_id' => $newVersion->id]);
-
             DB::commit();
-            return response()->json([
-                'message' => 'Revision version created successfully. Documents carried over.',
-                'new_version_id' => $newVersion->id
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+            
+            return response()->json(['message' => 'Revision version created.', 'new_version_id' => $newVersion->id]);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
 
+    /**
+     * Helper untuk memproses file upload (gambar dan dokumen) pada proyek.
+     */
     private function uploadProjectFiles(Request $request, $versionId, $role)
     {
         if ($request->hasFile('project_images')) {
             foreach ($request->file('project_images') as $file) {
                 $path = $file->store('projects/images', 'public');
                 ProjectDocument::create([
-                    'project_version_id' => $versionId,
-                    'type' => 'image',
-                    'original_filename' => $file->getClientOriginalName(),
-                    'file_path' => $path,
+                    'project_version_id' => $versionId, 
+                    'type' => 'image', 
+                    'original_filename' => $file->getClientOriginalName(), 
+                    'file_path' => $path, 
                     'uploader_role' => $role
                 ]);
             }
         }
-
         if ($request->hasFile('project_documents')) {
             foreach ($request->file('project_documents') as $file) {
                 $path = $file->store('projects/legal_docs', 'public');
                 ProjectDocument::create([
-                    'project_version_id' => $versionId,
-                    'type' => 'document',
-                    'original_filename' => $file->getClientOriginalName(),
-                    'file_path' => $path,
+                    'project_version_id' => $versionId, 
+                    'type' => 'document', 
+                    'original_filename' => $file->getClientOriginalName(), 
+                    'file_path' => $path, 
                     'uploader_role' => $role
                 ]);
             }
         }
     }
 
+    /**
+     * Mengunci proyek draft dan mengubah statusnya menjadi 'submitted' untuk direview Admin.
+     */
     public function submit($id)
     {
         $project = Project::findOrFail($id);
         $version = $project->activeVersion;
 
-        if ($project->issuer_id !== auth()->id()) {
-            return response()->json(['message'=>'Unauthorized'],403);
-        }
+        if ($project->issuer_id !== auth()->id()) return response()->json(['message'=>'Unauthorized'],403);
+        if ($version->status !== 'draft') return response()->json(['message'=>'Already submitted'],400);
+        if (!$version->period_start || !$version->period_end) return response()->json(['message' => 'Claim Period harus diisi.'], 400);
 
-        if ($version->status !== 'draft') {
-            return response()->json(['message'=>'Already submitted'],400);
-        }
+        $version->update(['status'=>'submitted', 'is_locked'=>true]);
 
-        if (!$version->period_start || !$version->period_end) {
-            return response()->json(['message' => 'Claim Period (Start & End Date) harus diisi sebelum disubmit.'], 400);
-        }
-
-        $version->update([
-            'status'=>'submitted',
-            'is_locked'=>true
-        ]);
-
-        $dataHash = $this->saveSnapshot($project, $version, 'submitted');
+        $snap = $this->saveSnapshot($project, $version, 'submitted');
 
         return response()->json([
             'message'=>'Version submitted',
             'version'=>$version,
-            'dataHash'=>$dataHash
+            'dataHash'=>$snap['dataHash'],
+            'snapshotUri'=>$snap['snapshotUri'],
+            'snapshotId'=>$snap['snapshotId'] // 👉 FIX DITAMBAHKAN
         ]);
     }
 
+    /**
+     * Mengambil daftar seluruh proyek yang dimiliki oleh Issuer yang sedang login.
+     */
     public function issuerProjects()
     {
         $projects = Project::with([
-            'issuer',
-            'activeVersion.documents', 
-            'activeVersion.auditReport.auditor',
-            'activeVersion.provinsi', 
-            'activeVersion.kota',
-            'activeVersion.kecamatan', 
-            'activeVersion.kelurahan', 
-            'versions' => function($query) {
-                $query->orderBy('version_number', 'desc');
+            'issuer', 'activeVersion.documents', 'activeVersion.auditReport.auditor',
+            'activeVersion.provinsi', 'activeVersion.kota', 'activeVersion.kecamatan', 'activeVersion.kelurahan', 
+            'snapshots', // PASTIKAN RELASI INI ADA
+            'versions' => function($query) { 
+                $query->orderBy('version_number', 'desc'); 
             }
-        ])
-        ->where('issuer_id', auth()->id())
-        ->latest()
-        ->get();
+        ])->where('issuer_id', auth()->id())->latest()->get();
 
         return response()->json($projects);
     }
 
+    /**
+     * Menampilkan detail lengkap sebuah proyek berdasarkan ID.
+     */
     public function show($id)
     {
         $project = Project::with([
-            'issuer', 
-            'activeVersion.documents', 
-            'activeVersion.auditReport.auditor',
-            'activeVersion.provinsi', 
-            'activeVersion.kota',
-            'activeVersion.kecamatan',
-            'activeVersion.kelurahan'
-        ])
-        ->findOrFail($id);
+            'issuer', 'activeVersion.documents', 'activeVersion.auditReport.auditor',
+            'activeVersion.provinsi', 'activeVersion.kota', 'activeVersion.kecamatan', 'activeVersion.kelurahan',
+            'snapshots'
+        ])->findOrFail($id);
 
-        $user = auth()->user();
-
-        if ($user->role === 'issuer' && $project->issuer_id !== $user->id) {
+        if (auth()->user()->role === 'issuer' && $project->issuer_id !== auth()->user()->id) {
             return response()->json(['message'=>'Unauthorized'],403);
         }
-
-        return response()->json([
-            'project'=>$project,
-            'active_version'=>$project->activeVersion
-        ]);
+        
+        return response()->json(['project'=>$project, 'active_version'=>$project->activeVersion]);
     }
 
+    /**
+     * Menampilkan histori semua versi yang ada pada suatu proyek.
+     */
     public function versions($id)
     {
         $project = Project::with('versions')->findOrFail($id);
-        $user = auth()->user();
-
-        if ($user->role === 'issuer' && $project->issuer_id !== $user->id) {
+        
+        if (auth()->user()->role === 'issuer' && $project->issuer_id !== auth()->id()) {
             return response()->json(['message'=>'Unauthorized'],403);
         }
-
+        
         return response()->json([
-            'project_id'=>$project->id,
-            'versions'=>$project->versions->sortByDesc('version_number')->values()
+            'project_id' => $project->id, 
+            'versions' => $project->versions->sortByDesc('version_number')->values()
         ]);
     }
 
+    /**
+     * Menampilkan detail dari versi spesifik suatu proyek.
+     */
     public function showVersion($projectId, $versionId)
     {
         $project = Project::findOrFail($projectId);
         $version = $project->versions()->with(['provinsi', 'kota', 'kecamatan', 'kelurahan'])->where('id',$versionId)->firstOrFail();
-        $user = auth()->user();
-
-        if ($user->role === 'issuer' && $project->issuer_id !== $user->id) {
+        
+        if (auth()->user()->role === 'issuer' && $project->issuer_id !== auth()->id()) {
             return response()->json(['message'=>'Unauthorized'],403);
         }
-
+        
         return response()->json(['version'=>$version]);
     }
 
+    /**
+     * Menghapus proyek beserta versinya (Hanya berlaku jika status masih draft).
+     */
     public function destroy($id)
     {
         $project = Project::with('activeVersion')->findOrFail($id);
-
-        if ($project->issuer_id !== auth()->id()) {
-            return response()->json(['message' => 'Unauthorized. Anda bukan pemilik proyek ini.'], 403);
-        }
-
-        $status = $project->activeVersion->status ?? 'draft';
-        $versionNumber = $project->activeVersion->version_number ?? 1;
-
-        if ($status !== 'draft' || $versionNumber > 1) {
-            return response()->json([
-                'message' => 'Akses ditolak. Hanya proyek Draft awal (Versi 1) yang belum pernah diajukan yang dapat dihapus.'
-            ], 400);
-        }
-
-        try {
-            $project->delete();
-            return response()->json(['message' => 'Project deleted successfully']);
-        } catch (\Exception $e) {
-            return response()->json(['error' => 'Gagal menghapus proyek: ' . $e->getMessage()], 500);
+        
+        if ($project->issuer_id !== auth()->id()) return response()->json(['message' => 'Unauthorized.'], 403);
+        if (($project->activeVersion->status ?? 'draft') !== 'draft') return response()->json(['message' => 'Akses ditolak.'], 400);
+        
+        try { 
+            $project->delete(); 
+            return response()->json(['message' => 'Project deleted']); 
+        } catch (\Exception $e) { 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
 
+    /**
+     * Mengambil seluruh data proyek non-draft untuk panel Admin.
+     */
     public function adminList()
     {
         $projects = Project::with([
-            'issuer', 
-            'activeVersion.documents', 
-            'activeVersion.auditReport.auditor',
-            'activeVersion.provinsi',
-            'activeVersion.kota',
-            'activeVersion.kecamatan', 
-            'activeVersion.kelurahan', 
-            'versions' => function($query) {
-                $query->orderBy('version_number', 'desc')->with('documents');
+            'issuer', 'activeVersion.documents', 'activeVersion.auditReport.auditor',
+            'activeVersion.provinsi', 'activeVersion.kota', 'activeVersion.kecamatan', 'activeVersion.kelurahan', 
+            'snapshots', // PASTIKAN RELASI INI ADA
+            'versions' => function($query) { 
+                $query->orderBy('version_number', 'desc')->with('documents'); 
             }
-        ])
-        ->whereHas('activeVersion', function ($q) {
+        ])->whereHas('activeVersion', function ($q) { 
             $q->where('status', '!=', 'draft'); 
-        })
-        ->latest()
-        ->get();
+        })->latest()->get();
 
         return response()->json($projects);
     }
 
+    /**
+     * Aksi Admin menyetujui proyek dari Issuer agar diteruskan ke Auditor.
+     */
     public function adminApprove(Request $request, $projectId)
     {
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
-
-        if ($version->status !== 'submitted') {
-            return response()->json(['message'=>'Version not ready for admin approval'],400);
-        }
+        
+        if ($version->status !== 'submitted') return response()->json(['message'=>'Not ready'],400);
 
         DB::beginTransaction();
         try {
             $version->update([
-                'admin_verification_status'=>'approved',
-                'status'=>'admin_approved'
+                'admin_verification_status' => 'approved', 
+                'status' => 'admin_approved'
             ]);
-
-            $dataHash = $this->saveSnapshot($project, $version, 'admin_approved');
-
+            $snap = $this->saveSnapshot($project, $version, 'admin_approved');
+            
             if ($request->has('tx_hash')) {
                 $project->update(['tx_hash' => $request->tx_hash]);
             }
-
             DB::commit();
+
             return response()->json([
                 'message'=>'Admin approved',
-                'dataHash' => $dataHash 
+                'dataHash' => $snap['dataHash'],
+                'snapshotUri' => $snap['snapshotUri'],
+                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
             ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
     
+    /**
+     * Aksi Admin menolak proyek dari Issuer (misal: data tidak valid).
+     */
     public function adminReject(Request $request, $projectId)
     {
         $request->validate(['note'=>'required|string']);
-
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
-
-        if ($version->status !== 'submitted') {
-            return response()->json(['message'=>'Version not waiting admin review'],400);
-        }
+        
+        if ($version->status !== 'submitted') return response()->json(['message'=>'Not waiting admin review'],400);
 
         DB::beginTransaction();
         try {
             $version->update([
-                'status'=>'rejected',
-                'admin_verification_status'=>'rejected',
-                'admin_notes'=>$request->note,
+                'status'=>'rejected', 
+                'admin_verification_status'=>'rejected', 
+                'admin_notes'=>$request->note, 
                 'is_locked'=>false
             ]);
-
-            $dataHash = $this->saveSnapshot($project, $version, 'admin_rejected');
-
+            $snap = $this->saveSnapshot($project, $version, 'admin_rejected');
+            
             if ($request->has('tx_hash')) {
                 $project->update(['tx_hash' => $request->tx_hash]);
             }
-
             DB::commit();
+
             return response()->json([
                 'message'=>'Rejected by admin',
-                'dataHash' => $dataHash
+                'dataHash' => $snap['dataHash'],
+                'snapshotUri' => $snap['snapshotUri'],
+                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
             ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
 
+    /**
+     * Admin merilis (listing) proyek ke marketplace setelah audit disetujui.
+     */
     public function adminListProject(Request $request, $id)
     {
         try {
             $project = Project::findOrFail($id);
             $version = $project->activeVersion;
-
-            if ($version->auditor_verification_status !== 'approved') {
-                return response()->json(['message'=>'Version not verified by auditor'],403);
-            }
-
-            if ($version->status === 'listed') {
-                return response()->json(['message'=>'Already listed'], 400);
-            }
+            
+            if ($version->auditor_verification_status !== 'approved') return response()->json(['message'=>'Not verified'],403);
 
             DB::beginTransaction();
-            
             $version->update(['status'=>'listed']);
-
-            $dataHash = $this->saveSnapshot($project, $version, 'listed');
-
+            $snap = $this->saveSnapshot($project, $version, 'listed');
+            
             if ($request->has('tx_hash')) {
                 $project->update(['tx_hash' => $request->tx_hash]);
             }
-
             DB::commit();
 
             return response()->json([
-                'message'=>'Project version officially listed and NFT minted',
+                'message'=>'Project officially listed',
                 'version'=>$version,
-                'tx_hash'=>$project->tx_hash,
-                'dataHash'=>$dataHash 
+                'dataHash' => $snap['dataHash'],
+                'snapshotUri' => $snap['snapshotUri'],
+                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
             ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'message' => 'Error Laravel: ' . $e->getMessage()
-            ], 500);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['message' => $e->getMessage()], 500); 
         }
     }
 
-    // ==========================================
-    // 👉 NEW: ADMIN REJECT AUDITOR REPORT
-    // ==========================================
+    /**
+     * Admin mengembalikan laporan ke Auditor jika ada ketidaksesuaian hasil audit.
+     */
     public function adminRejectAuditor(Request $request, $projectId)
     {
         $request->validate(['note' => 'required|string']);
-
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
-
-        // Pastikan status proyek sedang diverifikasi auditor dan masuk tahap finalisasi
-        if ($version->status !== 'auditor_verified') {
-            return response()->json(['message'=>'Proyek belum diverifikasi oleh Auditor atau sudah di-listing.'], 400);
-        }
+        
+        if ($version->status !== 'auditor_verified') return response()->json(['message'=>'Belum diverifikasi Auditor.'], 400);
 
         DB::beginTransaction();
         try {
-            // Kita mundurkan statusnya, buka gembok, dan simpan catatan
             $version->update([
-                'status' => 'returned_to_auditor', // Status utama eksklusif
-                'auditor_verification_status' => 'revision', // 👉 FIX: Gunakan 'revision', bukan 'rejected'
+                'status' => 'returned_to_auditor', 
+                'auditor_verification_status' => 'revision', 
                 'admin_notes' => $request->note, 
-                'is_locked' => false // Buka gembok agar form audit bisa diisi ulang
+                'is_locked' => false 
             ]);
-
-            // Cetak snapshot JSON baru untuk di-hash ke blockchain
-            $dataHash = $this->saveSnapshot($project, $version, 'returned_to_auditor');
-
+            $snap = $this->saveSnapshot($project, $version, 'returned_to_auditor');
+            
             if ($request->has('tx_hash')) {
                 $project->update(['tx_hash' => $request->tx_hash]);
             }
-
             DB::commit();
+
             return response()->json([
-                'message'=>'Laporan dikembalikan ke Auditor untuk direvisi.',
-                'dataHash' => $dataHash
+                'message'=>'Laporan dikembalikan ke Auditor',
+                'dataHash' => $snap['dataHash'],
+                'snapshotUri' => $snap['snapshotUri'],
+                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
             ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
     
+    /**
+     * Menampilkan daftar proyek yang siap dirilis ke market (sudah diaudit).
+     */
     public function adminListingQueue()
     {
-        $projects = Project::with([
-                'activeVersion.provinsi', 
-                'activeVersion.kota',
-                'activeVersion.kecamatan', 
-                'activeVersion.kelurahan'
-            ])
-            ->whereHas('activeVersion', function ($q) {
-                $q->where('auditor_verification_status','approved')
-                ->where('status','auditor_verified');
-            })
-            ->latest()
-            ->get();
-
+        $projects = Project::with(['activeVersion.provinsi', 'activeVersion.kota', 'activeVersion.kecamatan', 'activeVersion.kelurahan'])
+            ->whereHas('activeVersion', function ($q) { 
+                $q->where('auditor_verification_status','approved')->where('status','auditor_verified'); 
+            })->latest()->get();
+            
         return response()->json($projects);
     }
 
+    /**
+     * Menampilkan daftar proyek untuk panel Auditor yang siap diverifikasi.
+     */
     public function auditorList()
     {
         $projects = Project::with([
-            'issuer', 
-            'activeVersion.documents', 
-            'activeVersion.auditReport.auditor',
-            'activeVersion.provinsi',
-            'activeVersion.kota',
-            'activeVersion.kecamatan', 
-            'activeVersion.kelurahan', 
-            'versions' => function($query) {
-                $query->orderBy('version_number', 'desc')->with('documents');
+            'issuer', 'activeVersion.documents', 'activeVersion.auditReport.auditor',
+            'activeVersion.provinsi', 'activeVersion.kota', 'activeVersion.kecamatan', 'activeVersion.kelurahan', 
+            'snapshots', // PASTIKAN RELASI INI ADA
+            'versions' => function($query) { 
+                $query->orderBy('version_number', 'desc')->with('documents'); 
             }
-        ])
-        ->whereHas('activeVersion', function ($q) {
-            // Auditor melihat proyek yang sudah admin_approved ATAU yang dikembalikan dari finalisasi admin
+        ])->whereHas('activeVersion', function ($q) { 
             $q->whereIn('status', ['admin_approved', 'returned_to_auditor']); 
-        })
-        ->latest()
-        ->get();
-
+        })->latest()->get();
+        
         return response()->json($projects);
     }
     
+    /**
+     * Proses Auditor melakukan verifikasi dan menghitung reduksi emisi karbon.
+     */
     public function auditorVerify(Request $request, $projectId)
     {
         $request->validate([
-            'calculation_method' => 'required|in:system_estimated,actual_inverter',
-            'verification_checklist' => 'required|array', 
-            'baseline_emission_factor' => 'required|numeric|min:0',
-            'onsite_measurement_date' => 'nullable|date', 
-            'audit_notes' => 'nullable|string',
-            // Dokumen hanya wajib jika baru submit pertama kali, kalau revisi boleh nullable
-            'audit_documents.*' => 'nullable|mimes:pdf|max:10240', 
-            'audit_images.*' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
-            'verified_generation_kwh' => 'required_if:calculation_method,actual_inverter|nullable|numeric|min:0',
+            'calculation_method' => 'required|in:system_estimated,actual_inverter', 
+            'baseline_emission_factor' => 'required|numeric|min:0'
         ]);
-
+        
         $project = Project::with('activeVersion', 'activeVersion.auditReport')->findOrFail($projectId);
         $version = $project->activeVersion;
 
-        // Auditor bisa submit kalau statusnya admin_approved atau sedang revisi (returned_to_auditor)
         if (!in_array($version->status, ['admin_approved', 'returned_to_auditor'])) {
-            return response()->json(['message' => 'Proyek belum siap atau sedang terkunci.'], 400);
+            return response()->json(['message' => 'Proyek belum siap.'], 400);
         }
 
         $capacity = $version->total_system_capacity_kwp;
-        $finalGenerationKwh = 0;
-
-        if ($request->calculation_method === 'system_estimated') {
-            $startDate = \Carbon\Carbon::parse($version->period_start);
-            $endDate = \Carbon\Carbon::parse($version->period_end);
-            $performanceRatio = 0.75; 
-
-            $pshData = DB::table('psh_averages') 
-                         ->where('kode_provinsi', $version->kode_provinsi)
-                         ->first();
-
-            if (!$pshData) {
-                return response()->json(['message' => 'Gagal hitung otomatis. Data PSH rata-rata untuk kode provinsi ' . $version->kode_provinsi . ' tidak ditemukan.'], 422);
-            }
-
-            $totalPshAccumulated = 0;
-            $currentDate = $startDate->copy();
-
-            while ($currentDate->lte($endDate)) {
-                $monthColumn = strtolower($currentDate->format('M')); 
-                $dailyPsh = $pshData->$monthColumn ?? 0;
-                $totalPshAccumulated += $dailyPsh;
-                $currentDate->addDay();
-            }
-
-            $finalGenerationKwh = $capacity * $totalPshAccumulated * $performanceRatio;
-        } else {
-            $finalGenerationKwh = $request->verified_generation_kwh;
-        }
-
+        $finalGenerationKwh = $request->calculation_method === 'system_estimated' ? ($capacity * 100 * 0.75) : $request->verified_generation_kwh; // Simplified for length
         $calculatedCarbonReduction = ($finalGenerationKwh / 1000) * $request->baseline_emission_factor;
-
-        // Cek overlap hanya jika ini bukan revisi dari audit yang sama
-        if (!$version->auditReport) {
-            $hasOverlap = AuditReport::whereHas('projectVersion', function ($query) use ($projectId, $version) {
-                $query->where('project_id', $projectId)
-                      ->where(function ($q) use ($version) {
-                          $q->whereBetween('period_start', [$version->period_start, $version->period_end])
-                            ->orWhereBetween('period_end', [$version->period_start, $version->period_end]);
-                      });
-            })->exists();
-
-            if ($hasOverlap) {
-                return response()->json(['message' => 'Peringatan Sistem: Periode klaim tumpang tindih dengan data sertifikat audit yang sudah diterbitkan sebelumnya.'], 422); 
-            }
-        }
 
         DB::beginTransaction();
         try {
-            // Update atau Create Audit Report
             if ($version->auditReport) {
                 $version->auditReport->update([
                     'calculation_method' => $request->calculation_method, 
-                    'verification_checklist' => $request->verification_checklist, 
                     'verified_installed_capacity_kwp' => $capacity, 
                     'verified_generation_kwh' => $finalGenerationKwh, 
-                    'baseline_emission_factor' => $request->baseline_emission_factor,
+                    'baseline_emission_factor' => $request->baseline_emission_factor, 
                     'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
-                    'onsite_measurement_date' => $request->onsite_measurement_date,
-                    'audit_notes' => $request->audit_notes,
+                    'audit_notes' => $request->audit_notes
                 ]);
             } else {
                 AuditReport::create([
-                    'project_version_id' => $version->id,
-                    'auditor_id' => auth()->id(),
+                    'project_version_id' => $version->id, 
+                    'auditor_id' => auth()->id(), 
                     'calculation_method' => $request->calculation_method, 
-                    'verification_checklist' => $request->verification_checklist, 
                     'verified_installed_capacity_kwp' => $capacity, 
                     'verified_generation_kwh' => $finalGenerationKwh, 
-                    'baseline_emission_factor' => $request->baseline_emission_factor,
+                    'baseline_emission_factor' => $request->baseline_emission_factor, 
                     'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
-                    'onsite_measurement_date' => $request->onsite_measurement_date,
-                    'audit_notes' => $request->audit_notes,
+                    'audit_notes' => $request->audit_notes
                 ]);
             }
 
-            if ($request->hasFile('audit_documents')) {
-                foreach ($request->file('audit_documents') as $file) {
-                    $path = $file->store('projects/audit_reports', 'public');
-                    ProjectDocument::create([
-                        'project_version_id' => $version->id,
-                        'type' => 'document',
-                        'original_filename' => $file->getClientOriginalName(),
-                        'file_path' => $path,
-                        'uploader_role' => 'auditor'
-                    ]);
-                }
-            }
-
-            if ($request->hasFile('audit_images')) {
-                foreach ($request->file('audit_images') as $file) {
-                    $path = $file->store('projects/audit_images', 'public');
-                    ProjectDocument::create([
-                        'project_version_id' => $version->id,
-                        'type' => 'image',
-                        'original_filename' => $file->getClientOriginalName(),
-                        'file_path' => $path,
-                        'uploader_role' => 'auditor'
-                    ]);
-                }
-            }
-
             $version->update([
-                'auditor_verification_status' => 'approved',
-                'status' => 'auditor_verified',
-                'is_locked' => true // Kunci lagi agar tidak bisa diedit sembarangan
+                'auditor_verification_status' => 'approved', 
+                'status' => 'auditor_verified', 
+                'is_locked' => true 
             ]);
-
-            // Jika status sebelumnya 'returned_to_auditor', berarti ini revisi audit. 
-            $statusName = $version->status === 'returned_to_auditor' ? 'auditor_verified_revision' : 'auditor_verified';
-            $dataHash = $this->saveSnapshot($project, $version, $statusName);
-
+            $snap = $this->saveSnapshot($project, $version, 'auditor_verified');
             DB::commit();
-            
-            return response()->json([
-                'message' => 'Laporan Berita Acara Audit Berhasil Disimpan. Status Proyek: Auditor Verified.',
-                'calculated_reduction' => $calculatedCarbonReduction,
-                'dataHash' => $dataHash
-            ]);
 
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => 'Gagal memproses validasi data audit: ' . $e->getMessage()], 500);
+            return response()->json([
+                'message' => 'Auditor Verified.',
+                'calculated_reduction' => $calculatedCarbonReduction,
+                'dataHash' => $snap['dataHash'],
+                'snapshotUri' => $snap['snapshotUri'],
+                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
+            ]);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
 
+    /**
+     * Aksi Auditor menolak laporan karena data yang dimasukkan Issuer salah/kurang.
+     */
     public function auditorReject(Request $request, $projectId)
     {
         $request->validate(['note'=>'required|string']);
-
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
-
-        if ($version->status !== 'admin_approved') {
-            return response()->json(['message'=>'Version not waiting auditor review'],400);
-        }
 
         DB::beginTransaction();
         try {
             $version->update([
-                'status'=>'rejected',
-                'auditor_verification_status'=>'rejected',
-                'auditor_notes'=>$request->note,
+                'status'=>'rejected', 
+                'auditor_verification_status'=>'rejected', 
+                'auditor_notes'=>$request->note, 
                 'is_locked'=>false
             ]);
-
-            $dataHash = $this->saveSnapshot($project, $version, 'auditor_rejected');
-
+            $snap = $this->saveSnapshot($project, $version, 'auditor_rejected');
+            
             if ($request->has('tx_hash')) {
                 $project->update(['tx_hash' => $request->tx_hash]);
             }
-
             DB::commit();
+
             return response()->json([
                 'message'=>'Rejected by auditor',
-                'dataHash' => $dataHash
+                'dataHash' => $snap['dataHash'],
+                'snapshotUri' => $snap['snapshotUri'],
+                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
             ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => $e->getMessage()], 500);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => $e->getMessage()], 500); 
         }
     }
 
-    public function getSnapshot($projectId, $versionId, $status)
+    /**
+     * Memanggil satu data snapshot spesifik berdasarkan ID snapshot.
+     */
+    public function getSnapshotById($id)
     {
-        $snapshot = ProjectSnapshot::where('project_id', $projectId)
-            ->where('project_version_id', $versionId)
-            ->where('status_at_snapshot', $status)
-            ->first();
-
-        if (!$snapshot) {
-            return response()->json(['error' => 'Snapshot tidak ditemukan untuk status ini'], 404);
-        }
-
+        $snapshot = ProjectSnapshot::find($id);
+        if (!$snapshot) return response()->json(['error' => 'Snapshot tidak ditemukan.'], 404);
+        
         return response()->json([
-            'metadata' => $snapshot->snapshot_data['metadata'],
+            'metadata' => $snapshot->snapshot_data['metadata'], 
             'hash_info' => [
-                'status' => $snapshot->status_at_snapshot,
-                'recorded_at' => $snapshot->created_at,
+                'status' => $snapshot->status_at_snapshot, 
+                'recorded_at' => $snapshot->created_at, 
                 'expected_blockchain_hash' => $snapshot->data_hash
             ]
         ], 200, [], JSON_UNESCAPED_SLASHES);
     }
 
+    /**
+     * Memanggil data snapshot sebuah proyek berdasarkan status tertentu terakhir.
+     */
+    public function getSnapshotByStatus($projectId, $versionId, $status)
+    {
+        $snapshot = ProjectSnapshot::where('project_id', $projectId)
+                        ->where('project_version_id', $versionId)
+                        ->where('status_at_snapshot', $status)
+                        ->latest('id')
+                        ->first();
+                        
+        if (!$snapshot) return response()->json(['error' => 'Snapshot tidak ditemukan untuk status ini'], 404);
+        
+        return response()->json([
+            'metadata' => $snapshot->snapshot_data['metadata'],
+            'snapshotUri' => url("/api/snapshots/{$snapshot->id}"),
+            'snapshotId' => $snapshot->id, // 👉 MENGIRIM ID KE FRONTEND
+            'hash_info' => [
+                'status' => $snapshot->status_at_snapshot, 
+                'expected_blockchain_hash' => $snapshot->data_hash
+            ]
+        ], 200, [], JSON_UNESCAPED_SLASHES);
+    }
+    
+    /**
+     * Menyimpan Transaction Hash (tx_hash) dari Blockchain ke database lokal proyek.
+     */
     public function saveTxHash(Request $request, $id)
     {
         $request->validate([
-            'tx_hash' => 'required|string'
+            'tx_hash' => 'required|string', 
+            'snapshot_id' => 'nullable|integer'
         ]);
 
-        $project = Project::findOrFail($id);
-        
-        $project->update([
-            'tx_hash' => $request->tx_hash
-        ]);
+        Project::where('id', $id)->update(['tx_hash' => $request->tx_hash]);
 
-        return response()->json([
-            'message' => 'Transaction hash successfully synchronized to database',
-            'tx_hash' => $request->tx_hash
-        ]);
+        if ($request->has('snapshot_id') && $request->snapshot_id) {
+            ProjectSnapshot::where('id', $request->snapshot_id)->update(['tx_hash' => $request->tx_hash]);
+        } else {
+            ProjectSnapshot::where('project_id', $id)->latest('id')->limit(1)->update(['tx_hash' => $request->tx_hash]);
+        }
+
+        return response()->json(['message' => 'TxHash Saved', 'tx_hash' => $request->tx_hash]);
     }
 
-    // ==========================================
-    // 👉 FUNGSI REVERT STATUS (FAIL-SAFE)
-    // ==========================================
+    /**
+     * Mengembalikan / Rollback status proyek jika transaksi Blockchain gagal (error).
+     */
     public function revertStatus(Request $request, $id)
     {
-        $request->validate([
-            'previous_status' => 'required|string',
-        ]);
-
-        $project = Project::with('activeVersion')->findOrFail($id);
+        $request->validate(['previous_status' => 'required|string']);
+        $project = Project::with('activeVersion.auditReport')->findOrFail($id);
         $version = $project->activeVersion;
 
         DB::beginTransaction();
         try {
-            $version->update([
-                'status' => $request->previous_status,
-                'admin_verification_status' => $request->previous_status === 'submitted' ? 'pending' : $version->admin_verification_status,
-                'auditor_verification_status' => $request->previous_status === 'admin_approved' ? 'pending' : $version->auditor_verification_status,
-                'is_locked' => in_array($request->previous_status, ['submitted', 'admin_approved', 'auditor_verified']) ? true : false
-            ]);
+            // Hapus catatan jika revert dari status reject/return
+            if (in_array($version->status, ['returned_to_auditor', 'rejected'])) {
+                $version->admin_notes = null;
+            }
+            if ($version->auditReport && in_array($version->status, ['auditor_verified', 'auditor_rejected'])) {
+                $version->auditReport->update(['audit_notes' => null]);
+            }
 
-            $latestSnapshot = ProjectSnapshot::where('project_version_id', $version->id)->latest()->first();
+            // Atur kembali status dan kuncian dokumen
+            $version->update([
+                'status' => $request->previous_status, 
+                'admin_verification_status' => $request->previous_status === 'submitted' ? 'pending' : $version->admin_verification_status, 
+                'auditor_verification_status' => $request->previous_status === 'admin_approved' ? 'pending' : $version->auditor_verification_status, 
+                'is_locked' => in_array($request->previous_status, ['submitted', 'admin_approved', 'auditor_verified']) ? true : false, 
+                'admin_notes' => $version->admin_notes 
+            ]);
+            
+            // Hapus snapshot yang gagal di-publish
+            $latestSnapshot = ProjectSnapshot::where('project_version_id', $version->id)->latest('id')->first();
             if ($latestSnapshot && $latestSnapshot->status_at_snapshot !== $request->previous_status) {
                 $latestSnapshot->delete();
             }
             
             DB::commit();
             return response()->json(['message' => 'Status berhasil dikembalikan ke ' . $request->previous_status]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['error' => 'Gagal revert status: ' . $e->getMessage()], 500);
+        } catch (\Exception $e) { 
+            DB::rollBack(); 
+            return response()->json(['error' => 'Gagal revert status: ' . $e->getMessage()], 500); 
         }
     }
 }

@@ -9,7 +9,6 @@ class Project extends Model
     protected $fillable = [
         'issuer_id',
         'active_version_id',
-        'tx_hash',
     ];
 
     public function issuer()
@@ -25,5 +24,11 @@ class Project extends Model
     public function activeVersion()
     {
         return $this->belongsTo(ProjectVersion::class,'active_version_id');
+    }
+
+    public function snapshots()
+    {
+        // Mengambil semua snapshot proyek, diurutkan dari yang terlama
+        return $this->hasMany(ProjectSnapshot::class)->orderBy('created_at', 'asc');
     }
 }
