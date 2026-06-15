@@ -818,30 +818,34 @@ class ProjectController extends Controller
     }
     
     /**
-     * Menyimpan Transaction Hash (tx_hash) dari Blockchain HANYA ke database snapshot lokal.
+     * Menyimpan Transaction Hash dari Blockchain ke database lokal.
      */
     public function saveTxHash(Request $request, $id)
     {
         $request->validate([
-            'tx_hash' => 'required|string', 
-            'snapshot_id' => 'nullable' 
+            'tx_hash' => 'nullable|string',       // Untuk riwayat status (ProjectSnapshot)
+            'snapshot_id' => 'nullable', 
+            'blockchain_tx' => 'nullable|string'  // 👉 SEKARANG REKATS SAMA KAYA KOLOM DB
         ]);
 
-        // 👉 KUNCI PERBAIKAN: 
-        // Hapus query Project::update() karena tabel 'projects' memang tidak punya kolom 'tx_hash'.
-        // Kita HANYA menyimpan hash ini ke dalam riwayat 'project_snapshots'.
+        // 1. Simpan Hash Pencetakan Token ke kolom blockchain_tx di tabel Project
+        if ($request->has('blockchain_tx') && $request->blockchain_tx) {
+            Project::where('id', $id)->update(['blockchain_tx' => $request->blockchain_tx]);
+        }
 
-        if ($request->has('snapshot_id') && $request->snapshot_id) {
-            ProjectSnapshot::where('id', $request->snapshot_id)->update(['tx_hash' => $request->tx_hash]);
-        } else {
-            // Fallback aman: Jika React gagal mengirim ID Snapshot, cari jejak terakhir proyek ini
-            $latestSnapshot = ProjectSnapshot::where('project_id', $id)->orderBy('id', 'desc')->first();
-            if ($latestSnapshot) {
-                $latestSnapshot->update(['tx_hash' => $request->tx_hash]);
+        // 2. Simpan Hash Riwayat Status ke tabel ProjectSnapshot
+        if ($request->has('tx_hash') && $request->tx_hash) {
+            if ($request->has('snapshot_id') && $request->snapshot_id) {
+                ProjectSnapshot::where('id', $request->snapshot_id)->update(['tx_hash' => $request->tx_hash]);
+            } else {
+                $latestSnapshot = ProjectSnapshot::where('project_id', $id)->orderBy('id', 'desc')->first();
+                if ($latestSnapshot) {
+                    $latestSnapshot->update(['tx_hash' => $request->tx_hash]);
+                }
             }
         }
 
-        return response()->json(['message' => 'TxHash berhasil diamankan ke Snapshot!', 'tx_hash' => $request->tx_hash]);
+        return response()->json(['message' => 'Semua TxHash berhasil diamankan!']);
     }
 
     /**
