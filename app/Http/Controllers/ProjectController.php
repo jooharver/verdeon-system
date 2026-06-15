@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Auth;
 use App\Models\ProjectVersion;
 use App\Models\AuditReport;
 use App\Models\ProjectSnapshot; 
+use App\Helpers\EthereumSigner;
 
 class ProjectController extends Controller
 {
@@ -117,6 +118,47 @@ class ProjectController extends Controller
             'snapshotUri' => url("/api/snapshots/{$snapshot->id}"),
             'snapshotId' => $snapshot->id // 👉 ID GENERATED HERE
         ];
+    }
+
+    /**
+     * HELPER: Meng-generate Digital Signature sebelum Frontend memanggil MetaMask
+     */
+    public function requestMintSignature($projectId)
+    {
+        try {
+            $project = Project::with('activeVersion.auditReport', 'issuer')->findOrFail($projectId);
+            $version = $project->activeVersion;
+
+            if ($version->status !== 'auditor_verified') {
+                return response()->json(['error' => 'Proyek belum siap dicetak. Status harus auditor_verified.'], 400);
+            }
+
+            $auditReport = $version->auditReport;
+            $issuerWallet = $project->issuer->wallet_address;
+
+            if (!$issuerWallet) {
+                return response()->json(['error' => 'Issuer belum memiliki wallet address.'], 400);
+            }
+
+            // 👉 KUNCI PERBAIKAN: Gunakan Helper toWei kita yang baru!
+            $carbonAmount = $auditReport->carbon_reduction_amount_ton;
+            $amountInWei = EthereumSigner::toWei($carbonAmount);
+
+            // Generate Signature
+            $signature = EthereumSigner::signMintData($issuerWallet, $project->id, $amountInWei);
+
+            return response()->json([
+                'message' => 'Signature generated successfully',
+                'projectId' => $project->id,
+                'projectName' => $version->name,
+                'issuerWallet' => $issuerWallet,
+                'amountInWei' => $amountInWei,
+                'signature' => $signature
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Gagal membuat signature: ' . $e->getMessage()], 500);
+        }
     }
     
     /**
@@ -776,24 +818,30 @@ class ProjectController extends Controller
     }
     
     /**
-     * Menyimpan Transaction Hash (tx_hash) dari Blockchain ke database lokal proyek.
+     * Menyimpan Transaction Hash (tx_hash) dari Blockchain HANYA ke database snapshot lokal.
      */
     public function saveTxHash(Request $request, $id)
     {
         $request->validate([
             'tx_hash' => 'required|string', 
-            'snapshot_id' => 'nullable|integer'
+            'snapshot_id' => 'nullable' 
         ]);
 
-        Project::where('id', $id)->update(['tx_hash' => $request->tx_hash]);
+        // 👉 KUNCI PERBAIKAN: 
+        // Hapus query Project::update() karena tabel 'projects' memang tidak punya kolom 'tx_hash'.
+        // Kita HANYA menyimpan hash ini ke dalam riwayat 'project_snapshots'.
 
         if ($request->has('snapshot_id') && $request->snapshot_id) {
             ProjectSnapshot::where('id', $request->snapshot_id)->update(['tx_hash' => $request->tx_hash]);
         } else {
-            ProjectSnapshot::where('project_id', $id)->latest('id')->limit(1)->update(['tx_hash' => $request->tx_hash]);
+            // Fallback aman: Jika React gagal mengirim ID Snapshot, cari jejak terakhir proyek ini
+            $latestSnapshot = ProjectSnapshot::where('project_id', $id)->orderBy('id', 'desc')->first();
+            if ($latestSnapshot) {
+                $latestSnapshot->update(['tx_hash' => $request->tx_hash]);
+            }
         }
 
-        return response()->json(['message' => 'TxHash Saved', 'tx_hash' => $request->tx_hash]);
+        return response()->json(['message' => 'TxHash berhasil diamankan ke Snapshot!', 'tx_hash' => $request->tx_hash]);
     }
 
     /**

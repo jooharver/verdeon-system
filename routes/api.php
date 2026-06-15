@@ -78,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
         
         // 👉 NEW: Route untuk Admin mengembalikan laporan ke Auditor
         Route::post('/admin/projects/{id}/reject-auditor', [ProjectController::class, 'adminRejectAuditor']);
+        Route::get('/admin/projects/{id}/request-mint-signature', [ProjectController::class, 'requestMintSignature']);
     });
 
     // AUDITOR ONLY
