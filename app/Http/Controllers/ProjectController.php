@@ -338,13 +338,14 @@ class ProjectController extends Controller
     }
 
     /**
-     * Helper untuk memproses file upload (gambar dan dokumen) pada proyek.
+     * Helper untuk memproses file upload (gambar dan dokumen) pada proyek dari Issuer.
      */
     private function uploadProjectFiles(Request $request, $versionId, $role)
     {
         if ($request->hasFile('project_images')) {
             foreach ($request->file('project_images') as $file) {
-                $path = $file->store('projects/images', 'public');
+                // 👉 FOLDER KHUSUS ISSUER IMAGE
+                $path = $file->store('projects/issuer_images', 'public');
                 ProjectDocument::create([
                     'project_version_id' => $versionId, 
                     'type' => 'image', 
@@ -356,7 +357,8 @@ class ProjectController extends Controller
         }
         if ($request->hasFile('project_documents')) {
             foreach ($request->file('project_documents') as $file) {
-                $path = $file->store('projects/legal_docs', 'public');
+                // 👉 FOLDER KHUSUS ISSUER DOCUMENT
+                $path = $file->store('projects/issuer_documents', 'public');
                 ProjectDocument::create([
                     'project_version_id' => $versionId, 
                     'type' => 'document', 
@@ -405,7 +407,7 @@ class ProjectController extends Controller
             'versions' => function($query) { 
                 $query->orderBy('version_number', 'desc'); 
             }
-        ])->where('issuer_id', auth()->id())->latest()->get();
+        ])->where('issuer_id', auth()->id())->latest()->paginate(10);
 
         return response()->json($projects);
     }
@@ -492,7 +494,7 @@ class ProjectController extends Controller
             }
         ])->whereHas('activeVersion', function ($q) { 
             $q->where('status', '!=', 'draft'); 
-        })->latest()->get();
+        })->latest()->paginate(10);
 
         return response()->json($projects);
     }
@@ -668,7 +670,7 @@ class ProjectController extends Controller
             }
         ])->whereHas('activeVersion', function ($q) { 
             $q->whereIn('status', ['admin_approved', 'returned_to_auditor']); 
-        })->latest()->get();
+        })->latest()->paginate(10);
         
         return response()->json($projects);
     }
@@ -680,7 +682,12 @@ class ProjectController extends Controller
     {
         $request->validate([
             'calculation_method' => 'required|in:system_estimated,actual_inverter', 
-            'baseline_emission_factor' => 'required|numeric|min:0'
+            'baseline_emission_factor' => 'required|numeric|min:0',
+            'verified_generation_kwh' => 'required_if:calculation_method,actual_inverter|nullable|numeric|min:0',
+            'audit_notes' => 'nullable|string',
+            'verification_checklist' => 'nullable|array', // 👉 FIX: Tangkap checklist
+            'audit_documents.*' => 'nullable|mimes:pdf|max:10240', // 👉 FIX: Validasi file
+            'audit_images.*' => 'nullable|image|max:5120'
         ]);
         
         $project = Project::with('activeVersion', 'activeVersion.auditReport')->findOrFail($projectId);
@@ -691,11 +698,48 @@ class ProjectController extends Controller
         }
 
         $capacity = $version->total_system_capacity_kwp;
-        $finalGenerationKwh = $request->calculation_method === 'system_estimated' ? ($capacity * 100 * 0.75) : $request->verified_generation_kwh; // Simplified for length
+        $finalGenerationKwh = 0;
+
+        // ==========================================
+        // LOGIKA PERHITUNGAN MRV YANG BENAR
+        // ==========================================
+        if ($request->calculation_method === 'system_estimated') {
+            $startDate = \Carbon\Carbon::parse($version->period_start);
+            $endDate = \Carbon\Carbon::parse($version->period_end);
+            $performanceRatio = 0.75; 
+
+            $pshData = DB::table('psh_averages') 
+                         ->where('kode_provinsi', $version->kode_provinsi)
+                         ->first();
+
+            if (!$pshData) {
+                return response()->json(['message' => 'Gagal hitung otomatis. Data PSH tidak ditemukan.'], 422);
+            }
+
+            $totalPshAccumulated = 0;
+            $currentDate = $startDate->copy();
+
+            // Looping untuk mengakumulasikan PSH harian sesuai bulan berjalan
+            while ($currentDate->lte($endDate)) {
+                $monthColumn = strtolower($currentDate->format('M')); 
+                $dailyPsh = $pshData->$monthColumn ?? 0;
+                $totalPshAccumulated += $dailyPsh;
+                $currentDate->addDay();
+            }
+
+            $finalGenerationKwh = $capacity * $totalPshAccumulated * $performanceRatio;
+        } else {
+            // Gunakan daya aktual jika Auditor memilih metode actual_inverter
+            $finalGenerationKwh = $request->verified_generation_kwh;
+        }
+
+        // Hitung hasil akhir Tonase Karbon Reduksi
         $calculatedCarbonReduction = ($finalGenerationKwh / 1000) * $request->baseline_emission_factor;
+        // ==========================================
 
         DB::beginTransaction();
         try {
+            // 1. Simpan Data Laporan Audit
             if ($version->auditReport) {
                 $version->auditReport->update([
                     'calculation_method' => $request->calculation_method, 
@@ -703,7 +747,8 @@ class ProjectController extends Controller
                     'verified_generation_kwh' => $finalGenerationKwh, 
                     'baseline_emission_factor' => $request->baseline_emission_factor, 
                     'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
-                    'audit_notes' => $request->audit_notes
+                    'audit_notes' => $request->audit_notes,
+                    'verification_checklist' => $request->verification_checklist // 👉 FIX: Simpan checklist
                 ]);
             } else {
                 AuditReport::create([
@@ -714,16 +759,55 @@ class ProjectController extends Controller
                     'verified_generation_kwh' => $finalGenerationKwh, 
                     'baseline_emission_factor' => $request->baseline_emission_factor, 
                     'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
-                    'audit_notes' => $request->audit_notes
+                    'audit_notes' => $request->audit_notes,
+                    'verification_checklist' => $request->verification_checklist // 👉 FIX: Simpan checklist
                 ]);
             }
+
+            // ==============================================================
+            // 👉 FOLDER DAN TIPE KHUSUS UNTUK AUDITOR
+            // ==============================================================
+            if ($request->hasFile('audit_documents')) {
+                foreach ($request->file('audit_documents') as $file) {
+                    // 👉 FOLDER KHUSUS AUDITOR DOCUMENT
+                    $path = $file->store('projects/auditor_documents', 'public');
+                    ProjectDocument::create([
+                        'project_version_id' => $version->id, 
+                        'type' => 'audit_report', 
+                        'original_filename' => $file->getClientOriginalName(), 
+                        'file_path' => $path, 
+                        'uploader_role' => 'auditor'
+                    ]);
+                }
+            }
+
+            if ($request->hasFile('audit_images')) {
+                foreach ($request->file('audit_images') as $file) {
+                    // 👉 FOLDER KHUSUS AUDITOR IMAGE
+                    $path = $file->store('projects/auditor_images', 'public');
+                    ProjectDocument::create([
+                        'project_version_id' => $version->id, 
+                        'type' => 'audit_image', 
+                        'original_filename' => $file->getClientOriginalName(), 
+                        'file_path' => $path, 
+                        'uploader_role' => 'auditor'
+                    ]);
+                }
+            }
+            // ==============================================================
 
             $version->update([
                 'auditor_verification_status' => 'approved', 
                 'status' => 'auditor_verified', 
                 'is_locked' => true 
             ]);
+            
             $snap = $this->saveSnapshot($project, $version, 'auditor_verified');
+            
+            if ($request->has('tx_hash')) {
+                $project->update(['tx_hash' => $request->tx_hash]);
+            }
+            
             DB::commit();
 
             return response()->json([
@@ -731,7 +815,7 @@ class ProjectController extends Controller
                 'calculated_reduction' => $calculatedCarbonReduction,
                 'dataHash' => $snap['dataHash'],
                 'snapshotUri' => $snap['snapshotUri'],
-                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
+                'snapshotId' => $snap['snapshotId']
             ]);
         } catch (\Exception $e) { 
             DB::rollBack(); 

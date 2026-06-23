@@ -77,7 +77,7 @@ class ProjectSeeder extends Seeder
         foreach ($projectsData as $index => $data) {
             // 👉 KUNCI PERBAIKAN: Instansiasi manual untuk memaksa ID melompat ke angka 6
             $project = new Project();
-            $project->id = 6 + $index; // Looping 1: ID = 6, Looping 2: ID = 7, Looping 3: ID = 8
+            $project->id = 9 + $index; // Looping 1: ID = 6, Looping 2: ID = 7, Looping 3: ID = 8
             $project->issuer_id = $issuerId;
             $project->save();
 
