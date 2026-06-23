@@ -448,18 +448,27 @@ class ProjectController extends Controller
     }
 
     /**
-     * Menampilkan detail dari versi spesifik suatu proyek.
+     * Menampilkan detail dari versi spesifik suatu proyek beserta dokumen dan auditnya.
      */
     public function showVersion($projectId, $versionId)
     {
         $project = Project::findOrFail($projectId);
-        $version = $project->versions()->with(['provinsi', 'kota', 'kecamatan', 'kelurahan'])->where('id',$versionId)->firstOrFail();
+        
+        // 👉 FIX: Tambahkan eager loading 'documents' dan 'auditReport.auditor'
+        $version = $project->versions()->with([
+            'provinsi', 
+            'kota', 
+            'kecamatan', 
+            'kelurahan',
+            'documents',             // <--- Ini yang bikin galeri & dokumen muncul
+            'auditReport.auditor'    // <--- Ini yang bikin tab audit terisi
+        ])->where('id', $versionId)->firstOrFail();
         
         if (auth()->user()->role === 'issuer' && $project->issuer_id !== auth()->id()) {
-            return response()->json(['message'=>'Unauthorized'],403);
+            return response()->json(['message'=>'Unauthorized'], 403);
         }
         
-        return response()->json(['version'=>$version]);
+        return response()->json(['version' => $version]);
     }
 
     /**

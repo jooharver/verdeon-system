@@ -31,8 +31,9 @@ class ProjectSeeder extends Seeder
                 'inverter_brand' => 'Huawei',
                 'period_start' => Carbon::now()->subMonths(6)->format('Y-m-d'),
                 'period_end' => Carbon::now()->subMonths(1)->format('Y-m-d'),
-                'image' => 'projects/images/gambar1.jpg',
-                'document' => 'projects/legal_docs/dokumen1.pdf',
+                // 👉 FIX: Disesuaikan dengan folder baru
+                'image' => 'projects/issuer_images/gambar1.jpg',
+                'document' => 'projects/issuer_documents/dokumen1.pdf',
             ],
             [
                 'name' => 'PLTS Ground Mounted Desa Maju',
@@ -50,8 +51,9 @@ class ProjectSeeder extends Seeder
                 'inverter_brand' => 'SMA Solar',
                 'period_start' => Carbon::now()->subMonths(10)->format('Y-m-d'),
                 'period_end' => Carbon::now()->subMonths(2)->format('Y-m-d'),
-                'image' => 'projects/images/gambar2.jpg',
-                'document' => 'projects/legal_docs/dokumen2.pdf',
+                // 👉 FIX: Disesuaikan dengan folder baru
+                'image' => 'projects/issuer_images/gambar2.jpg',
+                'document' => 'projects/issuer_documents/dokumen2.pdf',
             ],
             [
                 'name' => 'PLTS Rooftop Gedung Perkantoran',
@@ -69,20 +71,20 @@ class ProjectSeeder extends Seeder
                 'inverter_brand' => 'Sungrow',
                 'period_start' => Carbon::now()->subMonths(4)->format('Y-m-d'),
                 'period_end' => Carbon::now()->subMonths(1)->format('Y-m-d'),
-                'image' => 'projects/images/gambar3.jpg',
-                'document' => 'projects/legal_docs/dokumen3.pdf',
+                // 👉 FIX: Disesuaikan dengan folder baru
+                'image' => 'projects/issuer_images/gambar3.jpg',
+                'document' => 'projects/issuer_documents/dokumen3.pdf',
             ]
         ];
 
         foreach ($projectsData as $index => $data) {
-            // 👉 KUNCI PERBAIKAN: Instansiasi manual untuk memaksa ID melompat ke angka 6
             $project = new Project();
-            $project->id = 9 + $index; // Looping 1: ID = 6, Looping 2: ID = 7, Looping 3: ID = 8
+            $project->id = 16 + $index; 
             $project->issuer_id = $issuerId;
             $project->save();
 
             $version = ProjectVersion::create([
-                'project_id' => $project->id, // Otomatis mengikat ke ID 6, 7, atau 8
+                'project_id' => $project->id, 
                 'version_number' => 1,
                 'name' => $data['name'],
                 'description' => $data['description'],
