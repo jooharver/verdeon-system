@@ -129,8 +129,9 @@ class ProjectController extends Controller
             $project = Project::with('activeVersion.auditReport', 'issuer')->findOrFail($projectId);
             $version = $project->activeVersion;
 
-            if ($version->status !== 'auditor_verified') {
-                return response()->json(['error' => 'Proyek belum siap dicetak. Status harus auditor_verified.'], 400);
+            // 🔥 FIX: Gunakan $version->status, BUKAN $project->status
+            if (!in_array($version->status, ['auditor_verified', 'listed'])) {
+                return response()->json(['error' => 'Proyek belum siap dicetak. Status harus auditor_verified atau listed.'], 400);
             }
 
             $auditReport = $version->auditReport;
@@ -516,6 +517,18 @@ class ProjectController extends Controller
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
         
+        // 🔥 FIX: LOGIKA RESUME APPROVAL
+        if ($version->status === 'admin_approved') {
+            $existingSnap = ProjectSnapshot::where('project_version_id', $version->id)
+                            ->where('status_at_snapshot', 'admin_approved')->latest('id')->first();
+            return response()->json([
+                'message' => 'Resuming approval',
+                'dataHash' => $existingSnap->data_hash ?? '',
+                'snapshotUri' => url("/api/snapshots/{$existingSnap->id}"),
+                'snapshotId' => $existingSnap->id
+            ]);
+        }
+
         if ($version->status !== 'submitted') return response()->json(['message'=>'Not ready'],400);
 
         DB::beginTransaction();
@@ -535,7 +548,7 @@ class ProjectController extends Controller
                 'message'=>'Admin approved',
                 'dataHash' => $snap['dataHash'],
                 'snapshotUri' => $snap['snapshotUri'],
-                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
+                'snapshotId' => $snap['snapshotId']
             ]);
         } catch (\Exception $e) { 
             DB::rollBack(); 
@@ -552,6 +565,18 @@ class ProjectController extends Controller
         $project = Project::with('activeVersion')->findOrFail($projectId);
         $version = $project->activeVersion;
         
+        // 🔥 FIX: LOGIKA RESUME REJECTION
+        if ($version->status === 'rejected') {
+            $existingSnap = ProjectSnapshot::where('project_version_id', $version->id)
+                            ->where('status_at_snapshot', 'admin_rejected')->latest('id')->first();
+            return response()->json([
+                'message' => 'Resuming rejection',
+                'dataHash' => $existingSnap->data_hash ?? '',
+                'snapshotUri' => url("/api/snapshots/{$existingSnap->id}"),
+                'snapshotId' => $existingSnap->id
+            ]);
+        }
+
         if ($version->status !== 'submitted') return response()->json(['message'=>'Not waiting admin review'],400);
 
         DB::beginTransaction();
@@ -573,7 +598,7 @@ class ProjectController extends Controller
                 'message'=>'Rejected by admin',
                 'dataHash' => $snap['dataHash'],
                 'snapshotUri' => $snap['snapshotUri'],
-                'snapshotId' => $snap['snapshotId'] // 👉 FIX DITAMBAHKAN
+                'snapshotId' => $snap['snapshotId']
             ]);
         } catch (\Exception $e) { 
             DB::rollBack(); 
@@ -591,6 +616,25 @@ class ProjectController extends Controller
             $version = $project->activeVersion;
             
             if ($version->auditor_verification_status !== 'approved') return response()->json(['message'=>'Not verified'],403);
+
+            // =========================================================
+            // 🔥 FIX: LOGIKA RESUME (PENCEGAH DUPLIKAT SNAPSHOT)
+            // =========================================================
+            if ($version->status === 'listed') {
+                // Jangan buat baru! Ambil snapshot yang sudah ada sebelumnya
+                $existingSnap = ProjectSnapshot::where('project_version_id', $version->id)
+                                ->where('status_at_snapshot', 'listed')
+                                ->latest('id')->first();
+                                
+                return response()->json([
+                    'message'=>'Resuming listing process',
+                    'version'=>$version,
+                    'dataHash' => $existingSnap->data_hash,
+                    'snapshotUri' => url("/api/snapshots/{$existingSnap->id}"),
+                    'snapshotId' => $existingSnap->id 
+                ]);
+            }
+            // =========================================================
 
             DB::beginTransaction();
             $version->update(['status'=>'listed']);
