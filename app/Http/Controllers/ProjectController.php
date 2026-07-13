@@ -738,8 +738,9 @@ class ProjectController extends Controller
             'baseline_emission_factor' => 'required|numeric|min:0',
             'verified_generation_kwh' => 'required_if:calculation_method,actual_inverter|nullable|numeric|min:0',
             'audit_notes' => 'nullable|string',
-            'verification_checklist' => 'nullable|array', // 👉 FIX: Tangkap checklist
-            'audit_documents.*' => 'nullable|mimes:pdf|max:10240', // 👉 FIX: Validasi file
+            'verification_checklist' => 'nullable|array', 
+            'onsite_measurement_date' => 'nullable|date',
+            'audit_documents.*' => 'nullable|mimes:pdf|max:10240', 
             'audit_images.*' => 'nullable|image|max:5120'
         ]);
         
@@ -801,7 +802,8 @@ class ProjectController extends Controller
                     'baseline_emission_factor' => $request->baseline_emission_factor, 
                     'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
                     'audit_notes' => $request->audit_notes,
-                    'verification_checklist' => $request->verification_checklist // 👉 FIX: Simpan checklist
+                    'verification_checklist' => $request->verification_checklist,
+                    'onsite_measurement_date' => $request->onsite_measurement_date
                 ]);
             } else {
                 AuditReport::create([
@@ -813,7 +815,8 @@ class ProjectController extends Controller
                     'baseline_emission_factor' => $request->baseline_emission_factor, 
                     'carbon_reduction_amount_ton' => $calculatedCarbonReduction, 
                     'audit_notes' => $request->audit_notes,
-                    'verification_checklist' => $request->verification_checklist // 👉 FIX: Simpan checklist
+                    'verification_checklist' => $request->verification_checklist,
+                    'onsite_measurement_date' => $request->onsite_measurement_date
                 ]);
             }
 
