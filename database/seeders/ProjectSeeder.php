@@ -79,7 +79,7 @@ class ProjectSeeder extends Seeder
 
         foreach ($projectsData as $index => $data) {
             $project = new Project();
-            $project->id = 29 + $index; 
+            $project->id = 900 + $index; 
             $project->issuer_id = $issuerId;
             $project->save();
 
